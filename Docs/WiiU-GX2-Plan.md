@@ -7,7 +7,8 @@ which needs a native `GX2` RHI backend. Milestones 1 and 2 (the spikes), 3 (the 
 clear and present), 4 (shaders, uniforms, textures; the main menu renders), 5 (levels, render targets and
 all rescale shaders) and 6A (the CPU no longer waits for the GPU every frame) are done; see "Spike results" and the
 "Milestone N results" sections below. `Software` stays the default RHI on the Wii U until the GX2 backend draws the
-game. Next step: the rest of milestone 6 (see the list below), most of which needs the console.
+game. Milestone 7's docs and CI are done too. Next step: test on the owner's console (the rest of milestone 6
+and milestone 7), then make `GX2` the default.
 
 ## Decisions
 
@@ -411,7 +412,10 @@ uniform ring warning appears, and frame time in the heaviest scenes (lighting pl
 6. A: **Done.** Fences, sectioned streaming and uniform rings, no `GX2DrawDone()` per frame.
    Still open: batching and instancing paths (check on hardware), `RHI_CAP_*` tuning, and removing the 1280x720
    window cap if 1080p output is cheap enough (both need hardware).
-7. Docs (`Docs/Consoles.dox`, `Docs/ShaderCompiler.dox`), CI, testing on the owner's console.
+7. Docs and CI: **done** (2026-11-13). `Docs/Consoles.dox` describes both backends (Software stays the
+   default), `Docs/ShaderCompiler.dox` documents `--emit-gx2`, and `.github/workflows/wiiu.yml` builds both
+   (`Jazz2_WiiU` and `Jazz2_WiiU_GX2`). Still open: testing on the owner's console, then making `GX2` the
+   default (`cmake/ncine_options.cmake`, the Consoles.dox table and section, the CI artifact names).
 
 ## Testing
 
