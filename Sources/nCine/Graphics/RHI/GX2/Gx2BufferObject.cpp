@@ -18,7 +18,7 @@ namespace nCine::RHI::GX2
 	std::uint32_t Gx2BufferObject::_nextHandle = 0;
 
 	Gx2BufferObject::Gx2BufferObject(BufferTarget target)
-		: _handle(++_nextHandle), _target(target), _data(nullptr), _size(0), _mappedOffset(0), _mappedLength(0)
+		: _handle(++_nextHandle), _target(target), _data(nullptr), _size(0), _mappedOffset(0), _mappedLength(0), _lastUse(0)
 	{
 	}
 
@@ -61,21 +61,45 @@ namespace nCine::RHI::GX2
 
 		_data = static_cast<std::uint8_t*>(_gpuBlock.Base);
 		_size = size;
+		_lastUse = 0;
 		std::memset(_data, 0, size);
 		FlushRange(0, size);
 		return true;
+	}
+
+	void Gx2BufferObject::PrepareCpuWrite(bool discardsAll)
+	{
+		if (_data == nullptr || Gx2Device::IsUseRetired(_lastUse)) {
+			return;
+		}
+		if (discardsAll) {
+			// What a driver does for an orphaned buffer: the queued draws keep reading the old block, which is retired
+			// and freed once they have run, and the CPU writes into a new one
+			Gx2Memory::Block fresh = Gx2Memory::Alloc(std::uint32_t(_size), StoreAlignment);
+			if (fresh.IsValid()) {
+				Gx2Device::RetireBlock(_gpuBlock);
+				_gpuBlock = fresh;
+				_data = static_cast<std::uint8_t*>(_gpuBlock.Base);
+				_lastUse = 0;
+				return;
+			}
+		}
+		Gx2Device::WaitForUse(_lastUse);
+		_lastUse = 0;
 	}
 
 	void Gx2BufferObject::BufferData(std::size_t size, const void* data, BufferUsage usage)
 	{
 		static_cast<void>(usage);
 
-		Reserve(size);
+		if (!Reserve(size)) {
+			// The same block again: the previous contents may go, which is cheap only if no queued draw reads them
+			PrepareCpuWrite(true);
+		}
 		if (_data == nullptr || data == nullptr) {
-			// Without data this is the orphaning idiom of RenderBuffersManager::Remap(), which runs right after the
-			// frame's draws were queued: GX2 does not rename buffers, so the GPU has not read these bytes yet and
-			// they must stay as they are (zeroing them here made every tile and lighting mesh degenerate). The
-			// next frame overwrites them only after PresentFrame() has waited for the GPU.
+			// Orphaning (`Geometry::CommitVertices()` on a custom buffer without mapping): the contents are undefined
+			// now and nothing is written. Do not zero them: in milestone 5, when RenderBuffersManager still orphaned
+			// its streaming buffers this way, that hit vertices queued draws had not read yet.
 			return;
 		}
 		std::memcpy(_data, data, size);
@@ -87,6 +111,7 @@ namespace nCine::RHI::GX2
 		if (data == nullptr || _data == nullptr || offset + size > _size) {
 			return;
 		}
+		PrepareCpuWrite(offset == 0 && size == _size);
 		std::memcpy(_data + offset, data, size);
 		FlushRange(offset, size);
 	}
@@ -112,9 +137,14 @@ namespace nCine::RHI::GX2
 
 	void* Gx2BufferObject::MapBufferRange(std::size_t offset, std::size_t length, MapFlags access)
 	{
-		static_cast<void>(access);
 		if (_data == nullptr || offset + length > _size) {
 			return nullptr;
+		}
+		if ((access & MapFlags::Persistent) != MapFlags::Persistent) {
+			// A persistent mapping is the section ring of RenderBuffersManager, which fences its own sections
+			const bool discardsAll = ((access & MapFlags::InvalidateBuffer) == MapFlags::InvalidateBuffer) ||
+				(offset == 0 && length == _size && (access & MapFlags::InvalidateRange) == MapFlags::InvalidateRange);
+			PrepareCpuWrite(discardsAll);
 		}
 		_mappedOffset = offset;
 		_mappedLength = length;
@@ -143,12 +173,12 @@ namespace nCine::RHI::GX2
 		if (offset + length > _size) {
 			length = _size - offset;
 		}
-		std::uint32_t mode;
-		switch (_target) {
-			case BufferTarget::Uniform: mode = GX2_INVALIDATE_MODE_UNIFORM_BLOCK; break;
-			default: mode = GX2_INVALIDATE_MODE_ATTRIBUTE_BUFFER; break;
+		if (_target == BufferTarget::Uniform) {
+			// The GPU never reads a uniform buffer: the device copies the bound ranges into its uniform ring,
+			// byte-swapped, at draw time, so there is nothing to push out of the CPU cache
+			return;
 		}
-		Gx2Memory::FlushCpuWrites(_data + offset, std::uint32_t(length), mode);
+		Gx2Memory::FlushCpuWrites(_data + offset, std::uint32_t(length), GX2_INVALIDATE_MODE_ATTRIBUTE_BUFFER);
 	}
 
 	void Gx2BufferObject::SetObjectLabel(StringView label)

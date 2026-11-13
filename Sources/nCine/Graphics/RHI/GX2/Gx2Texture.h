@@ -34,6 +34,11 @@ namespace nCine::RHI::GX2
 		output channel, so @ref SetSwizzle() only recomputes that word and the texels stay as uploaded. The
 		filter and wrap modes go into a `GX2Sampler` the draw path binds next to the texture
 		(@ref ApplySamplerState()).
+
+		The GPU copy is refreshed only when a draw binds the texture, and a queued draw of an earlier frame may
+		still sample it then. A draw stamps the texture with its batch token (@ref MarkUsed()); a refresh from
+		the host store while that token has not retired moves the GPU copy to a fresh block and retires the old
+		one, and @ref MapStreamingTexels() waits for the token instead (its caller rewrites the texels in place).
 	*/
 	class Gx2Texture
 	{
@@ -55,6 +60,10 @@ namespace nCine::RHI::GX2
 		void ReleaseGpu() const;
 		/** @brief Binds this texture and its sampler state to a pixel shader texture unit */
 		void ApplySamplerState(std::uint32_t textureUnit) const;
+		/** @brief Records that a draw of the batch with @p token samples the GPU copy (see @ref Gx2Device::GetUseToken()) */
+		inline void MarkUsed(std::uint32_t token) const {
+			_lastUse = token;
+		}
 
 		/**
 			@brief Returns a writable pointer to the GPU-visible store, for content rebuilt every frame
@@ -220,6 +229,8 @@ namespace nCine::RHI::GX2
 		mutable bool _contentsDirty;
 		mutable bool _streamingDirty;
 		mutable bool _samplerDirty;
+		// Token of the last batch with a draw that samples the GPU copy, 0 if none
+		mutable std::uint32_t _lastUse;
 
 		void Allocate(PixelFormat format, std::int32_t width, std::int32_t height);
 		/** @brief (Re)creates the GPU copy and its control structure when missing, then refreshes it if stale */

@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include <gx2/context.h>
+#include <coreinit/time.h>
 #include <gx2/surface.h>
 
 namespace nCine::RHI::GX2
@@ -41,7 +42,7 @@ namespace nCine::RHI::GX2
 		when the application comes back; only the context state is made current again.
 
 		<b>Draws.</b> A draw binds the program's vertex, pixel and fetch shaders, fills the stages'
-		loose-uniform blocks and copies the ranges the pipeline bound for the explicit blocks into a per-frame
+		loose-uniform blocks and copies the ranges the pipeline bound for the explicit blocks into a uniform
 		ring (@ref AllocateUniformData()), binds the textures to the units the pixel shader samples and one
 		attribute buffer per engine attribute slot.
 
@@ -50,10 +51,21 @@ namespace nCine::RHI::GX2
 		swapped. Writing them in place in the engine's buffers is not safe, because a range may be flushed
 		more than once.
 
-		<b>Milestone 4 state:</b> the CPU waits for the GPU at the end of every frame (`GX2DrawDone()` in
-		@ref PresentFrame()). GX2 does not rename buffers, so without that the engine would overwrite vertex
-		and uniform data the GPU is still reading for the previous frame; fences and sectioned ring buffers
-		(milestone 6) will remove the wait.
+		<b>The CPU runs ahead of the GPU.</b> GX2 does not rename buffers, so nothing the GPU may still read is
+		written by the CPU before the GPU is done with it. The device numbers the command batches it submits
+		(@ref GetUseToken()): the batch being recorded is flushed with `GX2Flush()` at the present (or when
+		something has to wait for it), and the GX2 timestamp of that submission (`GX2GetLastSubmittedTimeStamp()`)
+		is kept per batch, so a token is retired once `GX2GetRetiredTimeStamp()` has reached it. On top of that:
+		- the streaming vertex and index buffers are RenderBuffersManager's persistently mapped section ring
+		  (three sections), whose fences are such tokens (@ref InsertFence(), @ref ClientWaitFence());
+		- the uniform ring is cut into chunks, each remembering the batch that last read it, and a chunk is
+		  waited for before it is reused (@ref AllocateUniformData());
+		- every texture and vertex/index buffer a draw reads is stamped with the token of that draw, and a CPU
+		  write to one that is still in use either moves it to a fresh block (when the whole store is replaced:
+		  the old block is retired) or waits for the token;
+		- blocks of destroyed or reallocated resources are freed only when their token has retired
+		  (@ref RetireBlock()).
+		The present keeps `GX2WaitForFlip()` for pacing, which also keeps the CPU at most about a frame ahead.
 	*/
 	class Gx2Device
 	{
@@ -126,7 +138,7 @@ namespace nCine::RHI::GX2
 			DrawElementsInstanced(primitive, numIndices, IndexFormat::UInt16, indexOffset, numInstances, baseVertex);
 		}
 
-		/** @brief Fences are inert for now (milestone 6): the pipeline's ring buffers are not yet sectioned */
+		/** @brief Returns a fence for everything recorded so far: the token of the open batch (see @ref GetUseToken()) */
 		static FenceHandle InsertFence();
 		static void DeleteFence(FenceHandle& fence);
 		static bool ClientWaitFence(FenceHandle fence, std::uint64_t timeoutNs);
@@ -158,12 +170,23 @@ namespace nCine::RHI::GX2
 
 		/** @brief Blocks until the GPU has executed everything submitted so far (`GX2DrawDone()`) */
 		static void Finish();
+		/**
+			@brief Returns the token of the command batch being recorded
+			A resource stores it when a draw reads it; the token retires once the GPU has executed the batch.
+			Tokens are never 0, so 0 means "never used".
+		*/
+		static std::uint32_t GetUseToken();
+		/** @brief Whether the GPU has finished the batch of @p token (without waiting; an unsubmitted batch is not) */
+		static bool IsUseRetired(std::uint32_t token);
+		/** @brief Waits until the GPU has finished the batch of @p token, submitting it first if it is still open */
+		static bool WaitForUse(std::uint32_t token);
 
 		/**
 			@brief Holds @p block until the frames that may still reference it are done, then frees it
 
 			The GPU runs behind the CPU, so memory freed the moment a resource is destroyed may still be read
-			by commands already queued. Retired blocks are released a few presents later.
+			by commands already queued. A retired block is freed once the batch that was open when it was retired
+			has retired (checked at every present).
 		*/
 		static void RetireBlock(Gx2Memory::Block& block);
 
@@ -235,8 +258,8 @@ namespace nCine::RHI::GX2
 		static constexpr std::uint32_t MaxUniformBindings = 8;
 		/** @brief Blocks retired by a destroyed resource, released once the GPU is past the frame that used them */
 		static constexpr std::uint32_t RetiredBlockCount = 64;
-		/** @brief Frames a retired block is held for before its memory is handed back */
-		static constexpr std::uint32_t RetiredBlockFrameDelay = 2;
+		/** @brief Number of submitted batches whose GX2 timestamps are remembered */
+		static constexpr std::uint32_t BatchStampCount = 16;
 
 		struct UniformRange
 		{
@@ -248,7 +271,7 @@ namespace nCine::RHI::GX2
 		struct RetiredBlock
 		{
 			Gx2Memory::Block Block;
-			std::uint32_t RetiredAtFrame = 0;
+			std::uint32_t Token = 0;
 		};
 
 		static BlendingState _blending;
@@ -291,8 +314,19 @@ namespace nCine::RHI::GX2
 
 		/** @brief Size of the ring the loose-uniform blocks of a frame's draws are taken from */
 		static constexpr std::uint32_t UniformRingSize = 4 * 1024 * 1024;
+		/** @brief Number of chunks the uniform ring is cut into; a chunk is the unit that is waited for before reuse */
+		static constexpr std::uint32_t UniformRingChunkCount = 8;
+		static constexpr std::uint32_t UniformRingChunkSize = UniformRingSize / UniformRingChunkCount;
 		static Gx2Memory::Block _uniformRing;
-		static std::uint32_t _uniformRingOffset;
+		/** @brief Chunk the uniform ring allocates from and the offset within it */
+		static std::uint32_t _uniformChunk;
+		static std::uint32_t _uniformChunkOffset;
+		/** @brief Per chunk, the token of the last batch that may read it (0 if none) */
+		static std::uint32_t _uniformChunkTokens[UniformRingChunkCount];
+		/** @brief Token of the batch being recorded */
+		static std::uint32_t _openBatch;
+		/** @brief GX2 timestamp of each submitted batch, indexed by token modulo @ref BatchStampCount */
+		static OSTime _batchStamps[BatchStampCount];
 		/** @brief Program whose shaders are currently set on the GPU */
 		static const Gx2ShaderProgram* _lastProgram;
 
@@ -323,11 +357,15 @@ namespace nCine::RHI::GX2
 			@param force Release everything regardless of age; only correct after a @ref Finish()
 		*/
 		static void ReleaseRetiredBlocks(bool force = false);
+		/** @brief Submits the open batch (`GX2Flush()`), remembers its timestamp and opens the next one */
+		static void FlushBatch();
+		/** @brief Returns the GX2 timestamp that covers the submitted batch of @p token */
+		static OSTime GetBatchStamp(std::uint32_t token);
 		/**
-			@brief Returns 256-byte aligned memory for one draw's uniform block, valid until the frame is presented
+			@brief Returns 256-byte aligned memory for one draw's uniform block
 
-			Taken from a ring that the present resets; when a frame runs out of it, the CPU waits for the GPU
-			and starts over.
+			Taken from the current chunk of the uniform ring. When it is full, the ring moves on to the next
+			chunk after waiting for the batch that last read that one, which has normally retired long ago.
 		*/
 		static std::uint8_t* AllocateUniformData(std::uint32_t size);
 		/** @brief Uploads a stage's loose uniforms and binds its explicit uniform blocks */
