@@ -7,7 +7,8 @@ which needs a native `GX2` RHI backend. Milestones 1 and 2 (the spikes), 3 (the 
 clear and present), 4 (shaders, uniforms, textures; the main menu renders), 5 (levels, render targets and
 all rescale shaders) and 6A (the CPU no longer waits for the GPU every frame) are done; see "Spike results" and the
 "Milestone N results" sections below. `Software` stays the default RHI on the Wii U until the GX2 backend draws the
-game. Milestone 7's docs and CI are done too. Next step: test on the owner's console (the rest of milestone 6
+game. Milestone 7's docs and CI are done too. Scrolling and splitscreen were checked in Cemu; 3+ player splitscreen
+has wrong colours from the `Antialiasing` program (see "Cemu tests"). Next step: test on the owner's console (the rest of milestone 6
 and milestone 7), then make `GX2` the default.
 
 ## Decisions
@@ -315,9 +316,12 @@ Not done / still open:
 - The Software build is no reference for these effects (that tier leaves them out) and showed a black screen
   in `rescue/beach2` after 60 s in Cemu. A side-by-side check against a desktop build, or on the console, is
   still to do for the exact look of water and lighting.
-- Test hook: `Sources/Main.cpp` has a local, uncommitted `WIIU_TEST_HOOK` block (Wii U only) that reads
-  `sd:/wiiu/apps/Jazz2/autolevel.txt` (`<episode>/<level> [rescale mode]`, e.g. `rescue/psych3 2`) and starts that
-  level instead of the intro. Delete the file to boot normally. Keep the hook out of commits (its patch is
+- Test hook: `Sources/Main.cpp` and `Sources/Jazz2/LevelHandler.cpp` have local, uncommitted `WIIU_TEST_HOOK`
+  blocks (Wii U only). The first reads `sd:/wiiu/apps/Jazz2/autolevel.txt`
+  (`<episode>/<level> [rescale] [players] [walk] [noZoomOut]`, e.g. `rescue/psych3 2` or `prince/castle1 0 3 1`)
+  and starts that level instead of the intro; 2-4 players start local co-op (Jazz, Spaz, Jazz, Spaz: the test data
+  has no Lori). `walk` 1 makes every player run and jump, turning round every 900 frames. `noZoomOut` 1 turns off
+  Zoom out. Delete the file to boot normally. Keep the hook out of commits (its patch is
   in `~/jazz2-wiiu-test/patches/autolevel-hook.patch`).
 
 ## Milestone 6 results, part A (2026-11-13)
@@ -364,14 +368,47 @@ In these scenes nothing that a queued draw reads is rewritten (the camera stands
 reach the game in the headless setup with a guessed Cemu controller profile), so a second temporary build treated every
 resource drawn at least once as busy. The texture path then moved the GPU copy about 800 times during the intro
 (each cinematic frame re-uploads its texture) and the intro and menu rendered correctly. The buffer rename and wait
-paths still never ran: no custom vertex or index buffer (the tile-layer window cache) was rewritten after being
-drawn. They will first run when a layer scrolls; check tiles while scrolling on the console (or in Cemu with
-working input).
+paths are covered by the scrolling test below.
 
 Only the console can say what this buys: Cemu's frame rate means nothing, and how far the CPU runs ahead depends
 on the real GPU. Things to look at on hardware: whether `GX2WaitForFlip()` holds the CPU closer than one frame
 behind the scan-out than needed (`GX2GetSwapStatus()` was the alternative noted in milestone 4), how often the
 uniform ring warning appears, and frame time in the heaviest scenes (lighting plus a rescale shader).
+
+## Cemu tests: scrolling and splitscreen (2026-11-13)
+
+The local test hook (see Testing) now also makes every player run and jump, and can start local co-op with up to
+four players.
+
+**Scrolling.** `prince/castle1` with the player running back and forth renders without missing or garbled tiles.
+The tile layers do not use custom buffers on GX2, though: `TILEMAP_CACHE_LAYER_WINDOW` (`Jazz2/Tiles/TileMap.h`)
+is only defined for GL, D3D11, Vulkan, Metal and the GX/PICA/GS/GU tiers, so on GX2 every layer's quads go
+through the streaming ring each frame, and in normal play nothing calls the buffer rename or wait paths of
+`Gx2BufferObject::PrepareCpuWrite()`. To exercise them, a temporary build added `WITH_RHI_GX2` to that list:
+the window cache then rewrote 48 KB tile buffers about 60 times a second while scrolling. Cemu's GPU had always
+retired them by then, so two more temporary builds forced the busy case (every buffer drawn once counts as
+busy): about 1400 renames, then, with the discard forced off, about 1100 waits, both with clean frames.
+Whether to turn the window cache on for GX2 is a performance question for the console: it saves walking and
+copying every layer's window each frame (an eighth of the main thread on desktop, a fifth on the PSP), and
+the rename path gives it the same safety as a driver's orphaning.
+
+**Splitscreen.** Two players (horizontal split, `prince/castle1` and `rescue/beach2`) render correctly,
+including each viewport's HUD and the race-track minimap (`MpHUD::DrawMinimap()`, a `PolylineRenderer` line).
+Three and four players run, but **with Zoom out (`PreferZoomOut`, on by default) the whole frame comes out with
+wrong colours**: brown walls turn magenta, green turns blue. The average colour of a castle frame went from
+(0.48, 0.25, 0.16) to (0.48, 0.16, 0.33): output green is roughly input blue, and output blue is something else.
+- Cause, narrowed down: with three or more viewports and Zoom out, `LevelHandler::GetViewportSetup()`
+  supersamples the scene by 2, and `UpscaleRenderPass` then resolves it to the screen through the
+  `Antialiasing` program (bicubic, 16 `texture().rgb` taps). With Zoom out off, or with the resolve pass
+  disabled in a temporary build, the colours are right, so the GX2 build of `Antialiasing` is wrong in Cemu.
+  It is the only program that path adds, and no other test ran it.
+- Not known yet: whether CafeGLSL miscompiles it (would be wrong on the console too) or Cemu mistranslates it.
+  Its pixel shader is 558 dwords and 17 GPRs (`spikes/cafeglsl/t/Antialiasing.log`, `-v` disassembly).
+  Next steps: run three-player splitscreen on the console; or dump Cemu's GLSL translation (see Testing) and
+  check the green and blue chains; or, as a workaround to test, compute the taps as `vec4` or
+  per channel and see whether the result changes.
+- With the Software build, splitscreen showed a black screen in Cemu (as `rescue/beach2` did earlier); not
+  looked into.
 
 ## Backend contract (what to write)
 
@@ -410,7 +447,8 @@ uniform ring warning appears, and frame time in the heaviest scenes (lighting pl
 5. **Done.** `--emit-gx2` for all programs and variants; render targets (lighting, blur, combine, water); all
    rescale shaders.
 6. A: **Done.** Fences, sectioned streaming and uniform rings, no `GX2DrawDone()` per frame.
-   Still open: batching and instancing paths (check on hardware), `RHI_CAP_*` tuning, and removing the 1280x720
+   Scrolling and splitscreen checked in Cemu (see above); open: the `Antialiasing` colour bug with 3+
+   players, and whether to enable the tile-layer window cache on GX2. Still open: batching and instancing paths (check on hardware), `RHI_CAP_*` tuning, and removing the 1280x720
    window cap if 1080p output is cheap enough (both need hardware).
 7. Docs and CI: **done** (2026-11-13). `Docs/Consoles.dox` describes both backends (Software stays the
    default), `Docs/ShaderCompiler.dox` documents `--emit-gx2`, and `.github/workflows/wiiu.yml` builds both
@@ -439,6 +477,9 @@ uniform ring warning appears, and frame time in the heaviest scenes (lighting pl
   why `Application.cpp` passes the formatted entry as the format. Bit 62 also traces every coreinit call
   (about 150k lines in 25 s), so grep for `OSReport`. All bits on (`18446744073709551615`) adds the GX2
   API calls with their arguments, useful to see what a frame submits. The preseeded settings have `0`.
+- `Jazz2.log` loses its last lines when the test run kills Cemu. For a trace during play, set the coreinit log
+  flag and call `OSReport()` with a preformatted string; the game's own `LOGI` lines stopped reaching Cemu's
+  log after the level started in these runs.
 - Cemu's frame rate says nothing about the console's. Performance has to be judged on hardware.
 - Shader problems in Cemu: start Cemu without the game, turn on Debug > Dump > Shaders, then load the
   game with File > Load; Cemu writes its GLSL translation of every shader to `portable/dump/shaders/`.
@@ -455,7 +496,7 @@ uniform ring warning appears, and frame time in the heaviest scenes (lighting pl
   (`cmake -S Sources/Utilities/ShaderCompiler -B /b`); CafeGLSL's compiler is
   `~/jazz2-wiiu-test/spikes/cafeglsl/rel/cafeglsl-1.0.0-rc1-linux-x86_64/bin/glslcompiler`.
 - Levels in Cemu: with the local test hook applied (`git apply ~/jazz2-wiiu-test/patches/autolevel-hook.patch`,
-  never commit it), write `<episode>/<level> [rescale mode]` to Cemu's `sdcard/wiiu/apps/Jazz2/autolevel.txt` and
+  never commit it), write `<episode>/<level> [rescale] [players] [walk] [noZoomOut]` to Cemu's `sdcard/wiiu/apps/Jazz2/autolevel.txt` and
   run `B=_build_wiiu_gx2 SHOTS="50" scripts/testrun.sh`; the game boots straight into that level. Remove the file
   to get the intro and menu again. Level names are the folders under `Cache/Episodes` (e.g. `prince/castle1`,
   `rescue/psych3` dark, `rescue/beach2` water). `python3 -I ~/jazz2-wiiu-test/scripts/scan_levels.py
