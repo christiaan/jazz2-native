@@ -4,11 +4,9 @@ Status (2026-11-13): branch `wiiu-port` has a working Wii U port that renders wi
 and presents through wiiu-sdl2's GX2 renderer (see the Wii U section of `Docs/Consoles.dox`). It boots
 to the main menu in Cemu 2.6 and has not been tested on hardware yet. The owner wants full quality,
 which needs a native `GX2` RHI backend. Milestones 1 and 2 (the spikes), 3 (the backend skeleton with
-clear and present), 4 (shaders, uniforms, textures; the main menu renders) and most of 5 (levels) are done; see "Spike
-results", "Milestone 3 results" and "Milestone 4 results" below. `Software` stays the default RHI on the
-Wii U until the GX2 backend draws the game. Milestone 5 is mostly done (levels with lighting, blur, combine and
-water render in Cemu; see "Milestone 5 results"). Next step: fix the HQ2x, 3xBRZ and CleanEdge rescale shaders,
-then milestone 6.
+clear and present), 4 (shaders, uniforms, textures; the main menu renders) and 5 (levels, render targets and
+all rescale shaders) are done; see "Spike results" and the "Milestone N results" sections below. `Software` stays
+the default RHI on the Wii U until the GX2 backend draws the game. Next step: milestone 6.
 
 ## Decisions
 
@@ -287,15 +285,24 @@ What was wrong and is fixed:
   programmed (`Gx2Device::_applied`) and sends only what changed; a context-state restore (clears, scan-buffer
   copies, foreground) forgets it.
 
-Rescale shaders (`prince/castle1` with each rescale mode through the test hook): CRT Scanlines, CRT Shadow
-Mask, CRT Aperture Grille, Monochrome and SABR look right. **Three are broken**, next to fix:
-- HQ2x: the image is ghosted (blended with a shifted, washed-out copy).
-- 3xBRZ: the whole screen is one flat brown colour.
-- CleanEdge: black screen; Cemu logs "Unable to compile shader" for it. Dump the shader (see Testing) and check
-  the translated GLSL with `glslangValidator`; it may be another instruction Cemu does not translate, like the
-  `MULHI_INT` case in milestone 4, and then also has to be checked on the console.
-Keep `RHI_CAP_HEAVY_RESCALE_SHADERS` until these are understood; if one cannot be fixed, the menu offers it anyway,
-so it would need hiding on GX2.
+Rescale shaders (`prince/castle1` with each rescale mode through the test hook): all eight render in Cemu.
+HQ2x was checked against a reference (the HQ2x formula in plain Python, applied to the pixel-perfect frame):
+mean difference 0.6/255. Two Cemu 2.6 limitations broke three of them, both worked around in
+`--emit-gx2` (the console runs either form; the workarounds keep the shaders correct there too):
+- **Burst parameter exports.** CafeGLSL writes consecutive varyings with one burst export
+  (`EXPORT_DONE PARAM 1-4 R1-4`). Cemu 2.6 translates only the first parameter of a burst
+  (`LatteDecompilerEmitGLSL.cpp`, "export parameter"; fixed in Cemu main by "Latte: Support burst for vertex
+  exports", 2026-10-02, not in a release yet), so the other varyings reach the pixel shader undefined. HQ2x
+  came out ghosted, 3xBRZ flat brown. SABR also had a burst (it only looked right), and so do four batched
+  background programs. `SplitParamExportBursts()` rewrites every burst into single exports and relocates the
+  clauses and jump targets behind the grown CF program (padded to an even count for the 128-bit alignment of
+  fetch clauses). Found by dumping Cemu's shaders: the vertex shader declared only two of HQ2x's five outputs.
+- **`CEIL`.** Cemu (2.6 and main) has no translation for the R600 `CEIL` instruction ("Unsupported
+  instruction;" in the dumped GLSL, then "Unable to compile shader"), which CafeGLSL emitted for CleanEdge's
+  `ceil()`. The GX2 prelude now defines `ceil(x)` as `(-floor(-(x)))`, which is exact and compiles to `FLOOR`.
+After both, none of the 97 program variants contains `CEIL` or `MULHI_*`, and every ALU opcode CafeGLSL emits is
+one Cemu 2.6's translator handles (checked against its opcode list; `CNDGE`/`CNDGT` are its `CMOVGE`/`CMOVGT`).
+`RHI_CAP_HEAVY_RESCALE_SHADERS` stays on. Whether they are fast enough is for milestone 6 on hardware.
 
 Not done / still open:
 - `Gx2Texture::GetTexImage()` on a render target still returns the host store. Nothing in the engine calls
@@ -344,8 +351,8 @@ Not done / still open:
    layout looks like.
 3. **Done.** Clear screen + present on TV and GamePad through the new device (no shaders).
 4. **Done.** Textured sprite program: buffers, vertex format, one texture, uniforms. Main menu visible.
-5. **Mostly done.** `--emit-gx2` for all programs and variants; render targets (lighting, blur, combine, water).
-   Open: the HQ2x, 3xBRZ and CleanEdge rescale shaders.
+5. **Done.** `--emit-gx2` for all programs and variants; render targets (lighting, blur, combine, water); all
+   rescale shaders.
 6. Batching, instancing paths, fences, `RHI_CAP_*` tuning; remove the 1280x720 window cap if 1080p
    output is cheap enough.
 7. Docs (`Docs/Consoles.dox`, `Docs/ShaderCompiler.dox`), CI, testing on the owner's console.

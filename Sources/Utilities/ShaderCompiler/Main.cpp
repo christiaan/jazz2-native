@@ -2478,6 +2478,134 @@ namespace
 	}
 
 	/**
+		Splits the burst parameter exports of a vertex shader into one export per parameter
+
+		CafeGLSL writes consecutive varyings with one burst export (`EXPORT PARAM 1-4 R1-4`, BURST_COUNT > 0).
+		The console handles it, but Cemu 2.6 translates only the first parameter of a burst, so the others reach
+		the pixel shader undefined (HQ2x, 3xBRZ and SABR come out wrong; fixed in Cemu after 2.6). Each burst
+		becomes BURST_COUNT + 1 single exports. The CF program grows by the inserted instructions (rounded up
+		to an even count with a NOP after the end, so the fetch clauses stay 128-bit aligned), the clauses
+		behind it move up by as much, and every clause address and CF jump target is relocated. Returns false
+		without changing the program on a CF instruction it does not know how to relocate.
+	*/
+	bool SplitParamExportBursts(SmallVectorImpl<std::uint8_t>& program, String& error)
+	{
+		// R600/R700 control-flow opcodes (CF_INST, bits 23-29 of the second word; ALU clauses use 0x40 and up)
+		enum : std::uint32_t {
+			CfNop = 0x00, CfTex = 0x01, CfVtx = 0x02, CfVtxTc = 0x03, CfLoopStart = 0x04, CfPopPushElse = 0x11,
+			CfCall = 0x12, CfCallFs = 0x13, CfReturn = 0x14, CfExport = 0x27, CfExportDone = 0x28, CfAluFirst = 0x40
+		};
+		constexpr std::uint32_t ExportTypeParam = 2;
+
+		auto readLe32 = [&program](std::size_t offset) {
+			return std::uint32_t(program[offset]) | (std::uint32_t(program[offset + 1]) << 8) |
+				(std::uint32_t(program[offset + 2]) << 16) | (std::uint32_t(program[offset + 3]) << 24);
+		};
+
+		SmallVector<std::pair<std::uint32_t, std::uint32_t>, 0> cf;
+		bool foundEnd = false;
+		bool hasBurst = false;
+		for (std::size_t offset = 0; offset + 8 <= program.size(); offset += 8) {
+			std::uint32_t w0 = readLe32(offset), w1 = readLe32(offset + 4);
+			cf.emplace_back(w0, w1);
+			std::uint32_t inst = (w1 >> 23) & 0x7F;
+			if (inst >= CfAluFirst) {
+				continue;
+			}
+			if ((inst == CfExport || inst == CfExportDone) && ((w0 >> 13) & 0x3) == ExportTypeParam && ((w1 >> 17) & 0xF) != 0) {
+				hasBurst = true;
+			}
+			if ((w1 >> 21) & 1) {	// END_OF_PROGRAM
+				foundEnd = true;
+				break;
+			}
+		}
+		if (!hasBurst) {
+			return true;
+		}
+		if (!foundEnd) {
+			error = "vertex shader has no end of program"_s;
+			return false;
+		}
+
+		const std::uint32_t oldCount = std::uint32_t(cf.size());
+		SmallVector<std::uint32_t, 0> newIndex;
+		SmallVector<std::pair<std::uint32_t, std::uint32_t>, 0> out;
+		for (std::uint32_t i = 0; i < oldCount; i++) {
+			newIndex.push_back(std::uint32_t(out.size()));
+			auto [w0, w1] = cf[i];
+			std::uint32_t inst = (w1 >> 23) & 0x7F;
+			std::uint32_t burst = (w1 >> 17) & 0xF;
+			if ((inst == CfExport || inst == CfExportDone) && ((w0 >> 13) & 0x3) == ExportTypeParam && burst != 0) {
+				std::uint32_t arrayBase = w0 & 0x1FFF;
+				std::uint32_t gpr = (w0 >> 15) & 0x7F;
+				if (((w0 >> 22) & 1) != 0 || gpr + burst > 127 || arrayBase + burst > 0x1FFF) {
+					error = "vertex shader has a relative or out-of-range burst export"_s;
+					return false;
+				}
+				for (std::uint32_t j = 0; j <= burst; j++) {
+					std::uint32_t p0 = (w0 & ~((0x7Fu << 15) | 0x1FFFu)) | ((gpr + j) << 15) | (arrayBase + j);
+					std::uint32_t p1 = w1 & ~(0xFu << 17);
+					if (j < burst) {
+						// Only the last one keeps EXPORT_DONE and the end of program
+						p1 = (p1 & ~((0x7Fu << 23) | (1u << 21))) | (CfExport << 23);
+					}
+					out.emplace_back(p0, p1);
+				}
+			} else {
+				out.emplace_back(w0, w1);
+			}
+		}
+		if ((out.size() - oldCount) % 2 != 0) {
+			out.emplace_back(0u, CfNop << 23);
+		}
+		const std::uint32_t delta = std::uint32_t(out.size()) - oldCount;
+
+		// Relocate clause addresses (64-bit units from the program start) and jump targets (CF indices)
+		for (auto& [w0, w1] : out) {
+			std::uint32_t inst = (w1 >> 23) & 0x7F;
+			if (inst >= CfAluFirst) {
+				std::uint32_t addr = w0 & 0x3FFFFF;
+				if (addr < oldCount || addr + delta > 0x3FFFFF) {
+					error = "vertex shader has an ALU clause inside its CF program"_s;
+					return false;
+				}
+				w0 = (w0 & ~0x3FFFFFu) | (addr + delta);
+			} else if (inst == CfTex || inst == CfVtx || inst == CfVtxTc) {
+				if (w0 < oldCount) {
+					error = "vertex shader has a fetch clause inside its CF program"_s;
+					return false;
+				}
+				w0 += delta;
+			} else if (inst >= CfLoopStart && inst <= CfPopPushElse) {
+				if (w0 >= oldCount) {
+					error = "vertex shader jumps out of its CF program"_s;
+					return false;
+				}
+				w0 = newIndex[w0];
+			} else if (inst == CfCall || inst == CfReturn) {
+				error = "vertex shader has subroutines"_s;
+				return false;
+			}
+			// NOP, CALL_FS (its address is the fetch shader's), exports and the rest carry no address of ours
+		}
+
+		SmallVector<std::uint8_t, 0> result;
+		result.reserve(program.size() + delta * 8);
+		for (auto [w0, w1] : out) {
+			for (std::uint32_t w : { w0, w1 }) {
+				result.push_back(std::uint8_t(w));
+				result.push_back(std::uint8_t(w >> 8));
+				result.push_back(std::uint8_t(w >> 16));
+				result.push_back(std::uint8_t(w >> 24));
+			}
+		}
+		result.insert(result.end(), program.begin() + oldCount * 8, program.end());
+		program = Death::move(result);
+		return true;
+	}
+
+	/**
 		Turns the integer divisions of the vertex index by a constant into floating-point ones
 
 		The sprite shaders find their instance and quad corner as `gl_VertexID / 6` and `(gl_VertexID + K) / 3`.
@@ -2598,7 +2726,8 @@ namespace
 		if (ok) {
 			String bytes;
 			String error;
-			if (!ReadFileToString(outputPath, bytes) || !ParseGfdShaders(bytes, entry.Vertex, entry.Pixel, error)) {
+			if (!ReadFileToString(outputPath, bytes) || !ParseGfdShaders(bytes, entry.Vertex, entry.Pixel, error) ||
+				!SplitParamExportBursts(entry.Vertex.Program, error)) {
 				log = (error.empty() ? String{"CafeGLSL produced no output"_s} : error);
 				ok = false;
 			}
@@ -2840,6 +2969,9 @@ namespace
 					if (e.BatchSize > 0 && e.BatchSize < Gx2MaxBatchSize) {
 						continue;
 					}
+					// R600 has a CEIL instruction, but Cemu (2.6 and later) cannot translate it and rejects the
+					// whole shader (CleanEdge rendered black); FLOOR it handles, and this form is exact
+					prelude += "#define ceil(x) (-floor(-(x)))\n"_s;
 					prelude += "#line 0\n"_s;
 
 					String vertexSource = prelude + MakeVertexIdDivisionsFloat(

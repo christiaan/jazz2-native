@@ -110,7 +110,7 @@ Mode or option | Meaning
 `--emit-sw-generated <output.h> <in ...>` | Software-renderer header: every variant's fragment stage as C++
 `--emit-cg <output.h> <in ...>` | PS Vita header: every variant as Cg
 `--emit-rsx <output.h> <in ...>` | PlayStation 3 header: every variant as Cg compiled by `cgcomp` (path via `--cgcomp`). The only path building with `NO_DYNAMIC_BRANCHING`
-`--emit-gx2 <output.h> <in ...>` | Wii U header: every variant's OpenGL GLSL compiled in uniform-block mode by CafeGLSL's `glslcompiler` (path via `--cafeglsl`, else `$CAFEGLSL/bin`, else `PATH`)
+`--emit-gx2 <output.h> <in ...>` | Wii U header: every variant's OpenGL GLSL compiled in uniform-block mode by CafeGLSL's `glslcompiler` (path via `--cafeglsl`, else `$CAFEGLSL/bin`, else `PATH`). Works around what Cemu 2.6 cannot translate: vertex-index divisions become float, `ceil()` becomes `-floor(-x)`, and burst parameter exports are split
 `--emit-fixed-function <pvr\|gx\|pica\|gu\|gs\|rdp\|legacygl> <output.h> <in ...>` | Per-backend effect header: the applicable `fixed_function` block of every variant
 `--hlsl-check <in ...>` | Compiles every variant's HLSL via `D3DCompile` (`vs_5_0` / `ps_5_0`), printing a pass/fail table @m_span{m-text m-dim} (Windows only, `d3dcompiler_47.dll`) @m_endspan
 `--spirv-check [--glslang <path>] <in ...>` | Compiles every variant's Vulkan GLSL to SPIR-V via `glslangValidator`, printing a pass/fail table
