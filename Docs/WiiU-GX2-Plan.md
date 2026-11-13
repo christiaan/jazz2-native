@@ -3,8 +3,12 @@
 Status (2026-11-13): branch `wiiu-port` has a working Wii U port that renders with the `Software` RHI
 and presents through wiiu-sdl2's GX2 renderer (see the Wii U section of `Docs/Consoles.dox`). It boots
 to the main menu in Cemu 2.6 and has not been tested on hardware yet. The owner wants full quality,
-which needs a native `GX2` RHI backend. Nothing of the backend exists yet. Milestones 1 and 2 (the two
-spikes) are done; their results are under "Spike results" below. Next step: milestone 3.
+which needs a native `GX2` RHI backend. Milestones 1 and 2 (the spikes), 3 (the backend skeleton with
+clear and present), 4 (shaders, uniforms, textures; the main menu renders) and most of 5 (levels) are done; see "Spike
+results", "Milestone 3 results" and "Milestone 4 results" below. `Software` stays the default RHI on the
+Wii U until the GX2 backend draws the game. Milestone 5 is mostly done (levels with lighting, blur, combine and
+water render in Cemu; see "Milestone 5 results"). Next step: fix the HQ2x, 3xBRZ and CleanEdge rescale shaders,
+then milestone 6.
 
 ## Decisions
 
@@ -128,6 +132,184 @@ Tools in `~/jazz2-wiiu-test/spikes/cafeglsl/`: `rel/` (the release), `extract.py
 the generated headers), `dump.cpp`/`dump` (prints the reflection through `libcafeglsl.a`; run from `t/`
 as `../dump Name...`), and `t/` with the test sources, `.gsh` outputs and disassembly logs.
 
+## Milestone 3 results (2026-11-13)
+
+The backend exists in `Sources/nCine/Graphics/RHI/GX2/` (cloned from RSX, then rewritten where the
+hardware differs) and is selected with `-D NCINE_PREFERRED_RHI=GX2`. Verified in Cemu: the game boots
+through the GX2 device to the main loop and every frame is cleared and presented on the TV; a temporary
+build that forced a cycling clear colour on the screen buffer showed it full screen, changing between
+screenshots. Nothing else is visible yet, because no program has shader binaries (see below).
+
+What is in place:
+- `RhiFwd.h`/`Rhi.h` arms with `RHI_CAP_SHADERS`, `_FRAMEBUFFERS`, `_TRANSPARENT_RENDER_TARGETS`,
+  `_HEAVY_RESCALE_SHADERS`, `_BATCHING` and `_STREAMING_TEXTURES`. Revisit `_HEAVY_RESCALE_SHADERS` in
+  milestone 5 if CafeGLSL rejects a rescale shader.
+- `Gx2Device`: own `GX2ContextState` (shadowed) on SDL's GX2 setup, `GX2SetShaderMode(UNIFORM_BLOCK)`,
+  a 1280x720 screen `GX2ColorBuffer` (tiled, MEM2), blend/cull/viewport/scissor state, `Clear()` with
+  `GX2ClearColor()` followed by `GX2SetContextState()`, `PresentFrame()` copying to the TV and DRC scan
+  buffers, `GX2SwapScanBuffers`, `GX2Flush`, `GX2WaitForFlip`, TV/DRC enable after the first frame, and
+  the RSX-style retire list (freed two presents later). `MaxBatchSize` 585, `GetMaxUniformBlockSize()`
+  65536, uniform offset alignment 256.
+- No depth buffer anywhere: the engine never enables the depth test, so depth/stencil clears are ignored
+  and the depth unit is off.
+- `Gx2Memory`: every allocation is MEM2 from the default heap (`MEMAllocFromDefaultHeapEx`), not GX2R;
+  `FlushCpuWrites()` wraps `GX2Invalidate(mode | CPU)`.
+- `Gx2BufferObject`: MEM2 store, flushed after `BufferData`/`BufferSubData`, on `FlushMappedBufferRange`
+  and on `Unmap` (the last mapped range).
+- `Gx2Texture`: host store as in RSX plus a GPU `GX2Texture` (RGBA8; `LINEAR_ALIGNED` for ordinary
+  textures, tiled for render targets), `compMap` from the swizzle, `GX2Sampler` from filter/wrap,
+  `ApplySamplerState(unit)` binds both. Written but **not exercised yet** (no draws).
+- `Gx2RenderTarget`: a `GX2ColorBuffer` over the attached texture's surface; `SetRenderTarget` binds it
+  at once so a clear that follows hits it.
+- `Gx2ShaderProgram`: links from the offline reflection only; `HasBinaries()` is always `false`, and
+  `Gx2Device::DrawCommon()` returns early for such a program. Uniform caches, uniform blocks and vertex
+  formats are the RSX ones unchanged.
+- Background: `MainApplication::ProcessEvents` (SDL2, `WITH_RHI_GX2` only) calls
+  `RHI::Device::EnterBackground()` on `SDL_APP_WILLENTERBACKGROUND` (`GX2DrawDone`, then nothing is
+  submitted) and `EnterForeground()` on `SDL_APP_DIDENTERFOREGROUND` (context state made current again),
+  plus `SetFocus(false/true)`. In the background `PresentFrame()` sleeps 16 ms to throttle the loop.
+  Untested: Cemu has no HOME menu; needs the console.
+- `SdlGfxDevice`: window flags 0, drawable size from `GetScreenWidth/Height()`, `CreateSwapchain` after
+  the window, `PresentFrame()` in the update arm, no GL context teardown. `AboutSection` shows "GX2".
+- CMake: `NCINE_PREFERRED_RHI` accepts `Software` (default) or `GX2` on the Wii U; nothing extra to
+  link (coreinit and gx2 are part of wut).
+
+Open points for milestone 4:
+- The generated shader table (`--emit-gx2`), loading GFD shaders, fetch shaders from `Gx2VertexFormat`
+  (zero attributes for the sprite programs, see milestone 2), uniform blocks (loose uniforms into block 0
+  from `ResolveUniform()`, explicit blocks from `GetUniformRange()`; VS and PS numbered separately), and
+  textures through `ApplySamplerState()`. Uniform data handed to `GX2SetVertexUniformBlock` must be in
+  flushed, 256-byte aligned memory; the loose-uniform block needs a per-draw ring of its own.
+- Buffer streaming: GX2 does not rename buffers, so the CPU can overwrite vertex/uniform data the GPU
+  is still reading for the previous frame. RSX solved this by defining `NCINE_HAS_PERSISTENT_MAPPING` and
+  `NCINE_ALWAYS_PERSISTENT_MAPPING` in `RenderBuffersManager.cpp` (sectioned rings). The same is likely
+  needed here; with persistent mapping nothing is unmapped, so the flush has to move to
+  `FlushMappedBufferRange` or the draw path.
+- `Gx2Texture::TexSubImage2D` rewrites texels in place; fine while the GPU waits for each flip, but
+  check once frames overlap. Render-target readback (`GetTexImage`) returns the blank host store.
+- Cemu's `Jazz2.log` is not flushed when `testrun.sh` kills Cemu, so late log lines are lost; use the
+  Cemu log flags and `OSReport()` (see Testing) when log output matters. (Done in milestone 4: the log
+  entries now reach Cemu's log as text.)
+
+## Milestone 4 results (2026-11-13)
+
+The main menu renders through the GX2 backend in Cemu, matching the Software build (and also drawing the
+starfield background the Software tier leaves out). Frame 1 draws about 50 sprites with `TexturedBackground`,
+`DefaultSprite`, `DefaultBatchedSprites`, `BatchedColorized` and `BatchedPaletteRemap` into a 720x405
+render target, then one `DefaultSprite` draw scales it to the 1280x720 screen buffer. No backend warnings
+in the log.
+
+What is in place:
+- `ShaderCompiler --emit-gx2 <out.h> [--cafeglsl <glslcompiler>] <in.shader ...>` (also run by
+  `--generate-all`, skipped with a notice when CafeGLSL is missing, like `--emit-rsx`). It feeds CafeGLSL
+  the GL 3.3 GLSL (`#version 330` prelude, `BATCH_SIZE (585)` for batched programs) with
+  `--uniform-mode block`, parses the GFD file itself (tagged-offset pointers, see `ParseGfdShaderHeader`)
+  and writes `Sources/Shaders/Generated/Gx2GeneratedShaders.h`: per stage the `regs` words, the program
+  bytes and GX2 reflection tables (uniform blocks, loop vars, samplers, attribs, and only the members of
+  `__cafe_loose_uniforms`). All 97 program variants compile; the header is 2.3 MB (RSX: 3.4 MB).
+  Regenerate with `~/jazz2-wiiu-test/sc_build/ShaderCompiler --generate-all --shaders-dir Sources/Shaders
+  --out-dir <tmp> --cafeglsl <glslcompiler>` and copy `Gx2GeneratedShaders.h` over (on Linux the D3D11
+  and Vulkan headers come out stale, so do not use the in-tree `--generate-all` there). Run on
+  `Sources/Shaders/*.shader` by hand, the entries come out in shell-glob order instead; same content.
+  `--generate-all --check` on a host without CafeGLSL reports the committed header as "committed but no
+  longer generated", exactly as it already does for `RsxGeneratedShaders.h` without cgcomp; the check
+  needs an exemption for skipped optional headers before CI runs it.
+- `Gx2ShaderProgram::Link()` looks the (program, variant) up, copies both programs to MEM2 (256-aligned),
+  fills `GX2VertexShader`/`GX2PixelShader` and builds the bindings: loose uniforms (offsets are in
+  32-bit units in `GX2UniformVar`), explicit blocks matched by name to the engine block whose index is
+  its binding point, and samplers (engine unit from the reflection, hardware unit from the shader). A
+  program missing from the table links without binaries (warning) and its draws are skipped. Batched
+  programs take their batch size from the table.
+- Fetch shaders are built per program on first use and cached by `Gx2VertexFormat::CalculateFingerprint()`:
+  one stream per enabled attribute, attribute buffer index = engine attribute slot, the attribute's
+  offset within the vertex in the stream, `GX2_ENDIAN_SWAP_DEFAULT`. The sprite programs have no
+  attributes (empty fetch shader, works). **Attribute-based programs (mesh sprites, ImGui) are not
+  exercised by the menu and untested.** ImGui's packed `ImU32` colour is written in CPU (big-endian)
+  order, so `UNORM_8_8_8_8` will probably read it as ABGR; check when ImGui is first drawn.
+- `Gx2Device::DrawCommon()`: shaders (only when the program changes), fetch shader, uniform blocks,
+  textures (`Gx2Texture::ApplySamplerState()` on the hardware unit), attribute buffers, then
+  `GX2DrawEx(mode, count, firstVertex, instances)` or `GX2DrawIndexedEx2(..., baseVertex, ...)`.
+- **Uniform blocks must hold little-endian words.** The GPU swaps vertex attributes but reads uniform
+  blocks as they are (found with a spike: the byte-swapped copy of the same quad drew, the native one did
+  not). The device copies every loose block and every bound explicit range into a 4 MB per-frame ring
+  (`AllocateUniformData()`) with each 32-bit word swapped. Swapping the engine's buffers in place was
+  rejected: a range can be flushed twice (`FlushMappedBufferRange` and then `Unmap`).
+- **The shader mode is not restored by `GX2SetContextState()`** (it is a config register), and the
+  clears and scan-buffer copies use GX2's own register-mode shaders, so `RestoreContextState()` sets
+  `GX2_SHADER_MODE_UNIFORM_BLOCK` again after each of them. (This alone did not make anything visible;
+  the byte order above did. Keep it anyway, it is cheap and the GX2 docs require it.)
+- **Cemu 2.6 cannot translate `MULHI_INT` or `MULHI_UINT`** ("Unable to compile shader <hash>" in its
+  log, the dumped GLSL contains `Unsupported instruction;`), which CafeGLSL emits for an integer
+  division by a constant. The batched sprite shaders compute `gl_VertexID / 6` and
+  `(gl_VertexID + K) / 3`; `--emit-gx2` rewrites exactly these two forms to
+  `int((float(x) + 0.5) / N.0)` (`MakeVertexIdDivisionsFloat`), exact for any vertex index a batch
+  reaches. Other shaders may still contain integer divisions (check for "Unable to compile shader" in
+  Cemu's log when a new screen is reached).
+- The frame is serialised: `PresentFrame()` calls `GX2DrawDone()` after the swap and resets the uniform
+  ring. GX2 does not rename buffers, so without it the engine would overwrite vertex and uniform data
+  the GPU is still reading. Milestone 6 replaces this with fences and sectioned ring buffers.
+- Logging: `Application.cpp` now passes the formatted entry to `OSReport()` as the format string (with
+  `%` doubled), so Cemu's log shows the text instead of `"%s"`.
+
+Open points for milestone 5:
+- Render targets work for the menu's viewport target (tiled colour buffer sampled as a texture). Not
+  exercised yet: lighting, blur, combine, water and the rescale shaders (they need the original game
+  files in the test setup, see Testing), and `GetTexImage` readback.
+- `ApplyTarget()` runs on every draw because the pipeline sets the viewport per draw, so
+  `GX2SetColorBuffer` is called each time; only re-bind the colour buffer when the target changes.
+- Attribute-based programs and `firstVertex`/`baseVertex` other than 0 are untested (see above).
+- `Gx2Texture::TexSubImage2D` still rewrites texels in place; safe while every frame ends in
+  `GX2DrawDone()`.
+
+## Milestone 5 results (2026-11-13)
+
+Levels render through the GX2 backend in Cemu: tile layers, sprites, HUD, lighting with the blurred darkness
+(`rescue/psych3`, 42 % light), the combine pass, and water with its surface line and the tinted, distorted scene
+below it (`rescue/beach2`). `prince/castle1` matches the expected look. No "Unable to compile shader" in Cemu's
+log for any of them, so all program variants these levels reach translate. The original game files for the test
+setup are in `~/jazz2-game/jazz2` (retail copy) and were copied to Cemu's `sdcard/wiiu/apps/Jazz2/Source/`;
+the first boot converts them into `Cache/`.
+
+What was wrong and is fixed:
+- **Mesh draws (tile layers, lighting) read zeros.** `RenderBuffersManager::Remap()` orphans the streaming
+  buffers with `BufferData(size, nullptr)` right after the frame's draws were queued, and
+  `Gx2BufferObject::BufferData()` zeroed the store on a null pointer. GX2 does not rename buffers and the GPU
+  had not read the vertices and indices yet, so every indexed mesh was degenerate (sprites were unaffected:
+  they take their data from the uniform ring, copied at draw time). `BufferData(size, nullptr)` now leaves the
+  store alone (only a newly allocated block is zeroed), which is GL's orphaning contract. The next frame
+  rewrites the store only after `PresentFrame()`'s `GX2DrawDone()`; milestone 6 replaces that with the
+  sectioned ring (see milestone 4). This would have failed the same way on the console.
+  How it was found, for similar cases: the GX2 trace showed correct `GX2SetAttribBuffer`/`GX2DrawIndexedEx2`
+  calls and the data read back right at draw time, but drawing from a copy of the same bytes made the tiles
+  appear. Cemu's buffer cache, index cache, culling, index format and the `GX2DrawIndexed*` variants were
+  all ruled out along the way (the standalone spike draws indexed meshes with attributes fine).
+- `ApplyTarget()` re-sent the colour buffer, viewport and scissor before every draw. It now remembers what was
+  programmed (`Gx2Device::_applied`) and sends only what changed; a context-state restore (clears, scan-buffer
+  copies, foreground) forgets it.
+
+Rescale shaders (`prince/castle1` with each rescale mode through the test hook): CRT Scanlines, CRT Shadow
+Mask, CRT Aperture Grille, Monochrome and SABR look right. **Three are broken**, next to fix:
+- HQ2x: the image is ghosted (blended with a shifted, washed-out copy).
+- 3xBRZ: the whole screen is one flat brown colour.
+- CleanEdge: black screen; Cemu logs "Unable to compile shader" for it. Dump the shader (see Testing) and check
+  the translated GLSL with `glslangValidator`; it may be another instruction Cemu does not translate, like the
+  `MULHI_INT` case in milestone 4, and then also has to be checked on the console.
+Keep `RHI_CAP_HEAVY_RESCALE_SHADERS` until these are understood; if one cannot be fixed, the menu offers it anyway,
+so it would need hiding on GX2.
+
+Not done / still open:
+- `Gx2Texture::GetTexImage()` on a render target still returns the host store. Nothing in the engine calls
+  `Texture::SaveToMemory()` today, so it stays a stub.
+- ImGui (debug overlay, not in release builds) is the remaining untested attribute program; see the byte-order
+  note in milestone 4.
+- The Software build is no reference for these effects (that tier leaves them out) and showed a black screen
+  in `rescue/beach2` after 60 s in Cemu. A side-by-side check against a desktop build, or on the console, is
+  still to do for the exact look of water and lighting.
+- Test hook: `Sources/Main.cpp` has a local, uncommitted `WIIU_TEST_HOOK` block (Wii U only) that reads
+  `sd:/wiiu/apps/Jazz2/autolevel.txt` (`<episode>/<level> [rescale mode]`, e.g. `rescue/psych3 2`) and starts that
+  level instead of the intro. Delete the file to boot normally. Keep the hook out of commits (its patch is
+  in `~/jazz2-wiiu-test/patches/autolevel-hook.patch`).
+
 ## Backend contract (what to write)
 
 - `RhiFwd.h`: a `WITH_RHI_GX2` arm with capability macros (`RHI_CAP_SHADERS`, `_FRAMEBUFFERS`,
@@ -160,9 +342,10 @@ as `../dump Name...`), and `t/` with the test sources, `.gsh` outputs and disass
 2. **Done. Spike: CafeGLSL on our shaders.** Run the Docker compiler on 3-4 representative shaders
    (sprite, batched sprites, `Combine`, `Blur`) and check that they compile and what the uniform
    layout looks like.
-3. Clear screen + present on TV and GamePad through the new device (no shaders).
-4. Textured sprite program: buffers, vertex format, one texture, uniforms. Main menu visible.
-5. `--emit-gx2` for all programs and variants; render targets (lighting, blur, combine, water).
+3. **Done.** Clear screen + present on TV and GamePad through the new device (no shaders).
+4. **Done.** Textured sprite program: buffers, vertex format, one texture, uniforms. Main menu visible.
+5. **Mostly done.** `--emit-gx2` for all programs and variants; render targets (lighting, blur, combine, water).
+   Open: the HQ2x, 3xBRZ and CleanEdge rescale shaders.
 6. Batching, instancing paths, fences, `RHI_CAP_*` tuning; remove the 1280x720 window cap if 1080p
    output is cheap enough.
 7. Docs (`Docs/Consoles.dox`, `Docs/ShaderCompiler.dox`), CI, testing on the owner's console.
@@ -170,11 +353,12 @@ as `../dump Name...`), and `t/` with the test sources, `.gsh` outputs and disass
 ## Testing
 
 - Build: `devkitpro/devkitppc` Docker image, `-D CMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/WiiU.cmake`.
-  The previous session used `_build_wiiu/` with a wrapper script that keeps the build log out of the
-  context and greps errors.
+  `_build_wiiu/` is the Software build, `_build_wiiu_gx2/` the GX2 one. `~/jazz2-wiiu-test/scripts/build_gx2.sh`
+  configures (first time) and builds `$B` (default `_build_wiiu_gx2`), keeps the log in
+  `~/jazz2-wiiu-test/build.log` and prints only errors. A full GX2 build from scratch takes a few minutes.
 - Cemu 2.6 runs headless under Xvfb in a container (`~/jazz2-wiiu-test/`: `cemu/` extracted AppImage
   in portable mode with a preseeded `settings.xml` that skips the first-run wizard, image
-  `cemu-xvfb`, `run.sh` takes screenshots, `scripts/testrun.sh` repacks and runs the current build).
+  `cemu-xvfb`, `run.sh` takes screenshots, `B=_build_wiiu_gx2 scripts/testrun.sh` repacks and runs that build, default `_build_wiiu`).
   **Cemu stops at every `tw` instruction**, including the conditional `tweq` GCC 16 emits for
   libstdc++'s `shared_ptr` overflow check. That shows up as a grey screen with the main thread parked
   in an OS wait. `scripts/patch_tw.py` replaces conditional traps with `nop` in a test copy of the ELF
@@ -184,6 +368,30 @@ as `../dump Name...`), and `t/` with the test sources, `.gsh` outputs and disass
   backtrace that found the trap.
 - Game log: `sd:/wiiu/apps/Jazz2/Jazz2.log` (Cemu: `portable/sdcard/...`), and every line also goes to
   `OSReport()`, shown in Cemu's `log.txt` when the log flags are set: `<logflag>4611686018427387904</logflag>`
-  (bit 62, "Coreinit Logging") in `portable/settings.xml`. Cemu logs only the format string, so pass
-  an already formatted string to `OSReport`. The preseeded settings have `0`.
+  (bit 62, "Coreinit Logging") in `portable/settings.xml`. Cemu logs only the format string, which is
+  why `Application.cpp` passes the formatted entry as the format. Bit 62 also traces every coreinit call
+  (about 150k lines in 25 s), so grep for `OSReport`. All bits on (`18446744073709551615`) adds the GX2
+  API calls with their arguments, useful to see what a frame submits. The preseeded settings have `0`.
 - Cemu's frame rate says nothing about the console's. Performance has to be judged on hardware.
+- Shader problems in Cemu: start Cemu without the game, turn on Debug > Dump > Shaders, then load the
+  game with File > Load; Cemu writes its GLSL translation of every shader to `portable/dump/shaders/`.
+  Without a window manager this is scripted with xdotool: image `cemu-xvfb-dbg` (`cemu-xvfb` plus
+  `xdotool`, `glslang-tools`, `mesa-utils`) and `~/jazz2-wiiu-test/run_dbg.sh`, which runs `$XSTEPS`
+  (`;`-separated xdotool commands, `sleep:N`, `shot:name`) after starting Cemu with `$CEMU_ARGS`
+  (default `-g /t/jazz2.wuhb`). The sequence that worked:
+  `CEMU_ARGS="" XSTEPS="sleep:5;mousemove 268 12;click 1;sleep:1;key Down;key Down;key Right;sleep:1;key Down;key Return;sleep:1;mousemove 18 12;click 1;sleep:1;key Down;key Return;sleep:2;key ctrl+l;sleep:1;type /t/jazz2.wuhb;key Return;sleep:15;shot:m1"`.
+  `glslangValidator` on a dumped `.txt` shows why Cemu rejected it.
+- `~/jazz2-wiiu-test/spikes/gx2-draw/` is a standalone program that draws `DefaultSprite` from the
+  generated header with fixed uniforms (built like the other spikes, run with its `run.sh`); use it to
+  try GX2 behaviour without the engine.
+- ShaderCompiler for the host is built in the devkitPPC image into `~/jazz2-wiiu-test/sc_build`
+  (`cmake -S Sources/Utilities/ShaderCompiler -B /b`); CafeGLSL's compiler is
+  `~/jazz2-wiiu-test/spikes/cafeglsl/rel/cafeglsl-1.0.0-rc1-linux-x86_64/bin/glslcompiler`.
+- Levels in Cemu: with the local test hook applied (`git apply ~/jazz2-wiiu-test/patches/autolevel-hook.patch`,
+  never commit it), write `<episode>/<level> [rescale mode]` to Cemu's `sdcard/wiiu/apps/Jazz2/autolevel.txt` and
+  run `B=_build_wiiu_gx2 SHOTS="50" scripts/testrun.sh`; the game boots straight into that level. Remove the file
+  to get the intro and menu again. Level names are the folders under `Cache/Episodes` (e.g. `prince/castle1`,
+  `rescue/psych3` dark, `rescue/beach2` water). `python3 -I ~/jazz2-wiiu-test/scripts/scan_levels.py
+  ~/jazz2-game/jazz2 208` lists the original levels with their start lighting and whether they set a water level.
+- Cemu's graphics API is OpenGL (`<api>0</api>` in `settings.xml`); Vulkan (`1`, lavapipe in the container)
+  also works and behaved the same in milestone 5.

@@ -1,0 +1,341 @@
+#pragma once
+
+#include "Gx2Memory.h"
+#include "Gx2ShaderProgram.h"
+#include "../RhiTypes.h"
+#include "../../../Primitives/Rect.h"
+#include "../../../Primitives/Colorf.h"
+
+#include <cstdint>
+
+#include <gx2/context.h>
+#include <gx2/surface.h>
+
+namespace nCine::RHI::GX2
+{
+	class Gx2ShaderProgram;
+	class Gx2RenderTarget;
+	class Gx2Texture;
+
+	/**
+		@brief Pipeline-state and draw-call facade of the GX2 backend (aliased as `RHI::Device`)
+
+		Exposes the OpenGL device's surface (blending, depth, cull, scissor, viewport, clear and the draw
+		calls) so the backend-neutral render pipeline drives it unchanged, and owns the backend's side of the
+		GX2 session: its context state, the intermediate screen colour buffer and the present.
+
+		<b>GX2 itself belongs to SDL.</b> wiiu-sdl2's video driver calls `GX2Init()`, drives ProcUI, owns the
+		TV and GamePad scan buffers and frees its MEM1 heap whenever the application goes to the background.
+		The window backend keeps SDL's video subsystem and its window (for input and the ProcUI events) but
+		creates no `SDL_Renderer`, so nothing else submits GX2 work. This device sets up its own
+		`GX2ContextState` with shadowing enabled and renders with that.
+
+		<b>"Screen" is an intermediate colour buffer</b> the size of the window (the drawable size, see
+		@ref GetScreenWidth()). @ref PresentFrame() copies it into the TV and GamePad scan buffers with
+		`GX2CopyColorBufferToScanBuffer()`, which also scales it to each display's own resolution.
+
+		<b>Background.</b> Between @ref EnterBackground() and @ref EnterForeground() (the
+		`SDL_APP_WILLENTERBACKGROUND` / `SDL_APP_DIDENTERFOREGROUND` events) nothing is submitted: clears,
+		draws and presents return immediately, because SDL is about to release the foreground and its scan
+		buffers. All of this backend's memory is MEM2 (see @ref Gx2Memory), so nothing has to be recreated
+		when the application comes back; only the context state is made current again.
+
+		<b>Draws.</b> A draw binds the program's vertex, pixel and fetch shaders, fills the stages'
+		loose-uniform blocks and copies the ranges the pipeline bound for the explicit blocks into a per-frame
+		ring (@ref AllocateUniformData()), binds the textures to the units the pixel shader samples and one
+		attribute buffer per engine attribute slot.
+
+		<b>Uniform blocks are little endian.</b> The GPU byte-swaps vertex attributes (`GX2_ENDIAN_SWAP_DEFAULT`)
+		but reads uniform blocks as they are, so every block is copied into the ring with its 32-bit words
+		swapped. Writing them in place in the engine's buffers is not safe, because a range may be flushed
+		more than once.
+
+		<b>Milestone 4 state:</b> the CPU waits for the GPU at the end of every frame (`GX2DrawDone()` in
+		@ref PresentFrame()). GX2 does not rename buffers, so without that the engine would overwrite vertex
+		and uniform data the GPU is still reading for the previous frame; fences and sectioned ring buffers
+		(milestone 6) will remove the wait.
+	*/
+	class Gx2Device
+	{
+	public:
+		Gx2Device() = delete;
+		~Gx2Device() = delete;
+
+		struct ScissorState
+		{
+			bool Enabled = false;
+			Recti Rect = Recti(0, 0, 0, 0);
+		};
+
+		struct BlendingState
+		{
+			bool Enabled = false;
+			nCine::BlendingFactor SrcRgb = nCine::BlendingFactor::One;
+			nCine::BlendingFactor DstRgb = nCine::BlendingFactor::Zero;
+			nCine::BlendingFactor SrcAlpha = nCine::BlendingFactor::One;
+			nCine::BlendingFactor DstAlpha = nCine::BlendingFactor::Zero;
+		};
+
+		struct DepthTestState
+		{
+			bool TestEnabled = false;
+			bool MaskEnabled = true;
+		};
+
+		struct CullFaceState
+		{
+			bool Enabled = false;
+			CullFaceMode Mode = CullFaceMode::Back;
+		};
+
+		static void SetBlendingEnabled(bool enabled);
+		static void SetBlendingFactors(nCine::BlendingFactor srcRgb, nCine::BlendingFactor dstRgb, nCine::BlendingFactor srcAlpha, nCine::BlendingFactor dstAlpha);
+		static BlendingState GetBlendingState();
+		static void SetBlendingState(const BlendingState& state);
+
+		static void SetDepthTestEnabled(bool enabled);
+		static void SetDepthMaskEnabled(bool enabled);
+		static DepthTestState GetDepthTestState();
+		static void SetDepthTestState(const DepthTestState& state);
+
+		static void SetCullFaceEnabled(bool enabled);
+		static CullFaceState GetCullFaceState();
+		static void SetCullFaceState(const CullFaceState& state);
+
+		static ScissorState GetScissorState();
+		static void SetScissorState(const ScissorState& state);
+		static void SetScissor(const Recti& rect);
+		static void SetScissorTestEnabled(bool enabled);
+
+		static Recti GetViewport();
+		static void SetViewport(const Recti& rect);
+		static void InitViewport(std::int32_t x, std::int32_t y, std::int32_t width, std::int32_t height);
+
+		static Colorf GetClearColor();
+		static void SetClearColor(const Colorf& color);
+		static void Clear(ClearFlags flags);
+
+		static void DrawArrays(PrimitiveType primitive, std::int32_t firstVertex, std::int32_t numVertices);
+		static void DrawArraysInstanced(PrimitiveType primitive, std::int32_t firstVertex, std::int32_t numVertices, std::int32_t numInstances);
+		static void DrawElements(PrimitiveType primitive, std::uint32_t numIndices, IndexFormat indexFormat, std::uintptr_t indexOffset, std::int32_t baseVertex);
+		static inline void DrawElements(PrimitiveType primitive, std::uint32_t numIndices, std::uintptr_t indexOffset, std::int32_t baseVertex) {
+			DrawElements(primitive, numIndices, IndexFormat::UInt16, indexOffset, baseVertex);
+		}
+		static void DrawElementsInstanced(PrimitiveType primitive, std::uint32_t numIndices, IndexFormat indexFormat, std::uintptr_t indexOffset, std::int32_t numInstances, std::int32_t baseVertex);
+		static inline void DrawElementsInstanced(PrimitiveType primitive, std::uint32_t numIndices, std::uintptr_t indexOffset, std::int32_t numInstances, std::int32_t baseVertex) {
+			DrawElementsInstanced(primitive, numIndices, IndexFormat::UInt16, indexOffset, numInstances, baseVertex);
+		}
+
+		/** @brief Fences are inert for now (milestone 6): the pipeline's ring buffers are not yet sectioned */
+		static FenceHandle InsertFence();
+		static void DeleteFence(FenceHandle& fence);
+		static bool ClientWaitFence(FenceHandle fence, std::uint64_t timeoutNs);
+
+		static void SetupInitialState();
+
+		// -- Backend extensions (called by the resource types) --
+
+		/** @brief Records the currently bound shader program */
+		static void BindProgram(Gx2ShaderProgram* program);
+		/** @brief Returns the currently bound shader program */
+		static Gx2ShaderProgram* CurrentProgram();
+		/** @brief Records the texture bound to a texture unit */
+		static void BindTexture(std::uint32_t unit, const Gx2Texture* texture);
+		/** @brief Clears a texture from every unit it is bound to (called from ~Gx2Texture to avoid a dangling pointer) */
+		static void UnbindTexture(const Gx2Texture* texture);
+		/** @brief Returns the texture bound to a texture unit */
+		static const Gx2Texture* GetBoundTexture(std::uint32_t unit);
+		/** @brief Records the host data range bound to a uniform binding point */
+		static void BindUniformRange(std::uint32_t index, const std::uint8_t* data, std::uint32_t size);
+		/** @brief Returns the host data range bound to a uniform binding point (read by the draw path) */
+		static void GetUniformRange(std::uint32_t index, const std::uint8_t*& data, std::uint32_t& size);
+		/** @brief Clears a render target from the device if it is the current one (called from ~Gx2RenderTarget) */
+		static void UnbindRenderTarget(const Gx2RenderTarget* renderTarget);
+		/** @brief Records the current draw render target (its bound colour attachment receives the pixels) */
+		static void SetRenderTarget(Gx2RenderTarget* renderTarget);
+		/** @brief Clears a destroyed program from the device's current-program tracking (called from ~Gx2ShaderProgram) */
+		static void OnProgramDestroyed(const Gx2ShaderProgram* program);
+
+		/** @brief Blocks until the GPU has executed everything submitted so far (`GX2DrawDone()`) */
+		static void Finish();
+
+		/**
+			@brief Holds @p block until the frames that may still reference it are done, then frees it
+
+			The GPU runs behind the CPU, so memory freed the moment a resource is destroyed may still be read
+			by commands already queued. Retired blocks are released a few presents later.
+		*/
+		static void RetireBlock(Gx2Memory::Block& block);
+
+		/** @brief Monotonic count of presented frames */
+		static std::uint32_t GetFrameCounter();
+
+		/**
+			@brief Largest batch a batched sprite shader can address
+
+			GX2 uniform blocks are limited to 64 KB (`GetMaxUniformBlockSize()`), and the sprite instance
+			stride is 112 bytes, so 585 instances fit; the generated batched shaders are compiled with the same
+			`BATCH_SIZE`.
+		*/
+		static constexpr std::uint32_t MaxBatchSize = 585;
+
+		// -- GX2 session lifecycle (called by the window backend) --
+
+		/**
+			@brief Sets up the backend's GX2 context state and the screen colour buffer
+
+			SDL's video driver must already be initialised (it owns `GX2Init()` and the scan buffers).
+
+			@param windowHandle Ignored, there is one TV and one GamePad
+			@param width        Width of the screen colour buffer (the window's)
+			@param height       Height of the screen colour buffer
+			@param vsync        Whether the present waits for vertical blank
+		*/
+		static bool CreateSwapchain(void* windowHandle, std::int32_t width, std::int32_t height, bool vsync);
+		/** @brief Waits for the GPU, then releases everything @ref CreateSwapchain() created */
+		static void DestroySwapchain();
+		/** @brief No-op: the screen colour buffer keeps the window size, which does not change on the console */
+		static void ResizeSwapchain(std::int32_t width, std::int32_t height);
+		/** @brief Copies the screen colour buffer to the TV and GamePad scan buffers and queues the swap */
+		static void PresentFrame();
+		/** @brief No-op */
+		static inline void BeginGpuTiming() {}
+		/** @brief No-op */
+		static inline void EndGpuTiming() {}
+
+		/** @brief Stops all GPU submission (`SDL_APP_WILLENTERBACKGROUND`), after letting the GPU finish */
+		static void EnterBackground();
+		/** @brief Resumes GPU submission (`SDL_APP_DIDENTERFOREGROUND`) */
+		static void EnterForeground();
+
+		/** @brief Width of the screen colour buffer, which is the drawable size the window backend reports */
+		static std::int32_t GetScreenWidth();
+		/** @brief Height of the screen colour buffer */
+		static std::int32_t GetScreenHeight();
+		/** @brief Same as @ref GetScreenWidth(); the TV resolution itself is SDL's business */
+		static std::int32_t GetDisplayWidth();
+		/** @brief Same as @ref GetScreenHeight() */
+		static std::int32_t GetDisplayHeight();
+
+		/** @brief Largest supported 2D texture dimension */
+		static constexpr std::int32_t GetMaxTextureDimension() {
+			return 8192;
+		}
+		/** @brief Byte alignment the engine suballocates bound uniform ranges with (`GX2_UNIFORM_BLOCK_ALIGNMENT`) */
+		static constexpr std::int32_t GetUniformBufferOffsetAlignment() {
+			return 256;
+		}
+		/** @brief Byte budget of one uniform block */
+		static constexpr std::int32_t GetMaxUniformBlockSize() {
+			return 65536;
+		}
+
+	private:
+		static constexpr std::uint32_t MaxTextureUnits = 8;
+		static constexpr std::uint32_t MaxUniformBindings = 8;
+		/** @brief Blocks retired by a destroyed resource, released once the GPU is past the frame that used them */
+		static constexpr std::uint32_t RetiredBlockCount = 64;
+		/** @brief Frames a retired block is held for before its memory is handed back */
+		static constexpr std::uint32_t RetiredBlockFrameDelay = 2;
+
+		struct UniformRange
+		{
+			const std::uint8_t* Data = nullptr;
+			std::uint32_t Size = 0;
+		};
+
+		/** @brief A retired block together with the frame it stopped being referenced in */
+		struct RetiredBlock
+		{
+			Gx2Memory::Block Block;
+			std::uint32_t RetiredAtFrame = 0;
+		};
+
+		static BlendingState _blending;
+		static DepthTestState _depthTest;
+		static CullFaceState _cullFace;
+		static ScissorState _scissor;
+		static Recti _viewport;
+		static Colorf _clearColor;
+
+		static Gx2ShaderProgram* _currentProgram;
+		static const Gx2Texture* _boundTextures[MaxTextureUnits];
+		static UniformRange _boundUniformRanges[MaxUniformBindings];
+		static Gx2RenderTarget* _currentRenderTarget;
+
+		static GX2ContextState* _contextState;
+		static GX2ColorBuffer _screenBuffer;
+		static Gx2Memory::Block _screenMemory;
+		static std::int32_t _screenWidth;
+		static std::int32_t _screenHeight;
+
+		static bool _initialized;
+		static bool _inForeground;
+		static bool _vsync;
+		static bool _firstFrame;
+		static std::uint32_t _frameCounter;
+		/** @brief Set whenever the colour buffer, viewport or scissor may have changed since the last draw */
+		static bool _targetDirty;
+		/** @brief What was last programmed on the GPU, so a draw re-sends only what changed (the pipeline sets the
+			viewport before every draw); `AppliedColorBuffer == nullptr` means unknown, after the state was reset */
+		struct AppliedTarget {
+			const GX2ColorBuffer* ColorBuffer;
+			const void* Image;
+			std::int32_t Width, Height;
+			Recti Viewport;
+			Recti Scissor;
+		};
+		static AppliedTarget _applied;
+
+		static RetiredBlock _retiredBlocks[RetiredBlockCount];
+
+		/** @brief Size of the ring the loose-uniform blocks of a frame's draws are taken from */
+		static constexpr std::uint32_t UniformRingSize = 4 * 1024 * 1024;
+		static Gx2Memory::Block _uniformRing;
+		static std::uint32_t _uniformRingOffset;
+		/** @brief Program whose shaders are currently set on the GPU */
+		static const Gx2ShaderProgram* _lastProgram;
+
+		/** @brief Whether GX2 work may be submitted right now */
+		static inline bool CanSubmit() {
+			return (_initialized && _inForeground);
+		}
+		/** @brief Returns the colour buffer of the current target (the screen if none is bound) and its size */
+		static const GX2ColorBuffer* GetCurrentColorBuffer(std::int32_t& width, std::int32_t& height);
+		/** @brief Binds the current target's colour buffer and programs viewport and scissor, if they changed */
+		static void ApplyTarget();
+		/** @brief Programs the viewport and scissor of the current target from the tracked engine state */
+		static void ApplyViewportAndScissor(std::int32_t targetWidth, std::int32_t targetHeight);
+		/** @brief Makes the backend's context state current again after GX2 clobbered the pipeline state */
+		static void RestoreContextState();
+		/** @brief Forgets what was programmed, so the next draw sets the colour buffer, viewport and scissor again */
+		static inline void InvalidateTarget() {
+			_targetDirty = true;
+			_applied.ColorBuffer = nullptr;
+		}
+		/** @brief Programs blending from the tracked state */
+		static void ApplyBlending();
+		/** @brief Programs culling from the tracked state */
+		static void ApplyCulling();
+		/**
+			@brief Frees the retired blocks the GPU can no longer be reading
+
+			@param force Release everything regardless of age; only correct after a @ref Finish()
+		*/
+		static void ReleaseRetiredBlocks(bool force = false);
+		/**
+			@brief Returns 256-byte aligned memory for one draw's uniform block, valid until the frame is presented
+
+			Taken from a ring that the present resets; when a frame runs out of it, the CPU waits for the GPU
+			and starts over.
+		*/
+		static std::uint8_t* AllocateUniformData(std::uint32_t size);
+		/** @brief Uploads a stage's loose uniforms and binds its explicit uniform blocks */
+		static void ApplyStageUniforms(const Gx2ShaderProgram& program, const Gx2ShaderProgram::StageBindings& bindings, bool vertexStage);
+		/** @brief Binds one attribute buffer per enabled attribute of the program's vertex format */
+		static void ApplyAttributeBuffers(Gx2ShaderProgram& program);
+		/** @brief Common draw path; skips the draw while the bound program has no binaries */
+		static void DrawCommon(PrimitiveType primitive, std::int32_t firstVertex, std::uint32_t count,
+			bool indexed, IndexFormat indexFormat, std::uintptr_t indexOffset, std::int32_t numInstances, std::int32_t baseVertex);
+	};
+}
