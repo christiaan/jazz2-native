@@ -25,6 +25,14 @@ namespace nCine::RHI::GX2
 
 		The store is grow-only: a @ref BufferData() that fits the existing block reuses it, so the pipeline's
 		per-frame ring buffers allocate once.
+
+		GX2 does not rename buffers, so a CPU write must not land in bytes a queued draw still reads. A draw
+		stamps every vertex and index buffer it reads with its batch token (@ref MarkUsed()), and a write to a
+		buffer whose token has not retired either moves the store to a fresh block (when the write replaces all of
+		it: an orphaning @ref BufferData(), a whole-store @ref BufferSubData() or a map that may discard the
+		contents; the old block is retired) or waits for the token. A persistent mapping is never synchronised
+		here: RenderBuffersManager's section ring fences it. Uniform buffers are never stamped, because the device
+		copies their ranges into its own uniform ring at draw time and the GPU never reads them.
 	*/
 	class Gx2BufferObject
 	{
@@ -91,6 +99,11 @@ namespace nCine::RHI::GX2
 		/** @brief Sets a debug label for the buffer (ignored) */
 		void SetObjectLabel(StringView label);
 
+		/** @brief Records that a draw of the batch with @p token reads the store (see @ref Gx2Device::GetUseToken()) */
+		inline void MarkUsed(std::uint32_t token) const {
+			_lastUse = token;
+		}
+
 		// Static bound-handle helpers used by the shared VAO pool. The OpenGL backend keeps a per-target
 		// bound-buffer cache here; this backend has no such state, so these are inert. They mirror the OpenGL
 		// backend's static helpers so `RenderVaoPool` (which tracks a VAO's element array buffer) compiles
@@ -122,10 +135,17 @@ namespace nCine::RHI::GX2
 
 		std::size_t _mappedOffset;
 		std::size_t _mappedLength;
+		// Token of the last batch with a draw that reads the store, 0 if none
+		mutable std::uint32_t _lastUse;
 
 		/** @brief Flushes a written range of the store so the GPU sees it */
 		void FlushRange(std::size_t offset, std::size_t length);
 		/** @brief (Re)allocates the store to at least @p size bytes, keeping an already large enough one; returns `true` for a new (zeroed) block */
 		bool Reserve(std::size_t size);
+		/**
+			@brief Makes the store safe to write while queued draws may still read it (moves it or waits)
+			@param discardsAll Whether the previous contents of the whole store may be dropped
+		*/
+		void PrepareCpuWrite(bool discardsAll);
 	};
 }

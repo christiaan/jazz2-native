@@ -81,7 +81,7 @@ namespace nCine::RHI::GX2
 			_width(0), _height(0), _strideBytes(0),
 			_minFilter(nCine::SamplerFilter::Nearest), _magFilter(nCine::SamplerFilter::Nearest), _wrap(SamplerWrapping::ClampToEdge),
 			_textureUnit(0), _isRenderTarget(false), _gpuValid(false), _contentsDirty(false), _streamingDirty(false),
-			_samplerDirty(true)
+			_samplerDirty(true), _lastUse(0)
 	{
 		_swizzle[0] = SwizzleChannel::Red;
 		_swizzle[1] = SwizzleChannel::Green;
@@ -106,6 +106,7 @@ namespace nCine::RHI::GX2
 			Gx2Device::RetireBlock(_gpuBlock);
 		}
 		_gpuValid = false;
+		_lastUse = 0;
 	}
 
 	std::int32_t Gx2Texture::BytesPerPixel(PixelFormat format)
@@ -165,6 +166,12 @@ namespace nCine::RHI::GX2
 			// Only the promoted RGBA8 store has a GPU-side counterpart; the float and packed formats are
 			// accepted by the uploads but never sampled by this backend's shaders
 			return false;
+		}
+
+		if (_gpuValid && _contentsDirty && !_isRenderTarget && !Gx2Device::IsUseRetired(_lastUse)) {
+			// A queued draw may still sample the current copy (the palette is rewritten while the previous frame is
+			// on the GPU, for example), so the refresh goes into a new block rather than under the GPU
+			ReleaseGpu();
 		}
 
 		if (!_gpuValid) {
@@ -405,6 +412,10 @@ namespace nCine::RHI::GX2
 		if (!EnsureGpuTexture()) {
 			return nullptr;
 		}
+		// The caller writes straight into the GPU copy. Cinematics alternates between two textures, so the frame
+		// that sampled this one is normally done already.
+		Gx2Device::WaitForUse(_lastUse);
+		_lastUse = 0;
 
 		// The caller overwrites the whole surface every frame, so the host store is now stale by definition;
 		// clearing the dirty flag stops the next bind from copying it back over what was just written, and the

@@ -4,9 +4,10 @@ Status (2026-11-13): branch `wiiu-port` has a working Wii U port that renders wi
 and presents through wiiu-sdl2's GX2 renderer (see the Wii U section of `Docs/Consoles.dox`). It boots
 to the main menu in Cemu 2.6 and has not been tested on hardware yet. The owner wants full quality,
 which needs a native `GX2` RHI backend. Milestones 1 and 2 (the spikes), 3 (the backend skeleton with
-clear and present), 4 (shaders, uniforms, textures; the main menu renders) and 5 (levels, render targets and
-all rescale shaders) are done; see "Spike results" and the "Milestone N results" sections below. `Software` stays
-the default RHI on the Wii U until the GX2 backend draws the game. Next step: milestone 6.
+clear and present), 4 (shaders, uniforms, textures; the main menu renders), 5 (levels, render targets and
+all rescale shaders) and 6A (the CPU no longer waits for the GPU every frame) are done; see "Spike results" and the
+"Milestone N results" sections below. `Software` stays the default RHI on the Wii U until the GX2 backend draws the
+game. Next step: the rest of milestone 6 (see the list below), most of which needs the console.
 
 ## Decisions
 
@@ -257,7 +258,8 @@ Open points for milestone 5:
   `GX2SetColorBuffer` is called each time; only re-bind the colour buffer when the target changes.
 - Attribute-based programs and `firstVertex`/`baseVertex` other than 0 are untested (see above).
 - `Gx2Texture::TexSubImage2D` still rewrites texels in place; safe while every frame ends in
-  `GX2DrawDone()`.
+  `GX2DrawDone()`. (Milestone 6A: the host store is rewritten in place; the GPU copy moves to a new block when
+  it is refreshed while still in use.)
 
 ## Milestone 5 results (2026-11-13)
 
@@ -317,6 +319,59 @@ Not done / still open:
   level instead of the intro. Delete the file to boot normally. Keep the hook out of commits (its patch is
   in `~/jazz2-wiiu-test/patches/autolevel-hook.patch`).
 
+## Milestone 6 results, part A (2026-11-13)
+
+The frame is no longer serialised: `PresentFrame()` submits the frame with `GX2Flush()` and returns after
+`GX2WaitForFlip()`, without `GX2DrawDone()`, and `AllocateUniformData()` no longer calls it either. GX2 does not
+rename buffers, so everything the CPU writes is now kept off memory a queued draw still reads:
+- **Batch tokens as fences.** `Gx2Device` numbers its command batches (`GetUseToken()`, a 32-bit counter, never 0).
+  `FlushBatch()` (at the present, or when a wait needs the open batch) calls `GX2Flush()` and keeps
+  `GX2GetLastSubmittedTimeStamp()` for that batch in a 16-entry table; a token is retired once
+  `GX2GetRetiredTimeStamp()` reaches its stamp (`IsUseRetired()`), and `WaitForUse()` flushes the batch if it is
+  still open and then blocks in `GX2WaitTimeStamp()`. `InsertFence()` returns the open batch's token as the
+  `FenceHandle`; `ClientWaitFence()` polls for a zero timeout and otherwise waits (GX2 has no timed wait;
+  `GX2WaitTimeStamp()` gives up only on its own GPU timeout).
+- **Streaming vertex and index buffers** use RenderBuffersManager's persistently mapped three-section ring, as on
+  the RSX (`NCINE_HAS_PERSISTENT_MAPPING` + `NCINE_ALWAYS_PERSISTENT_MAPPING` for `WITH_RHI_GX2`). Unlike the RSX,
+  the CPU cache is not coherent with the GPU, so `NCINE_PERSISTENT_MAPPING_NEEDS_FLUSH` makes `FlushUnmap()` flush
+  the section's written range (`FlushMappedBufferRange()` -> `GX2Invalidate(CPU | ATTRIBUTE_BUFFER)`) before the
+  frame's draws. The section fences are real here; `Application::Step()` waits for the next section after the
+  present, as on the other platforms. The orphaning `BufferData(size, nullptr)` of milestone 5 is no longer
+  called on these buffers.
+- **Uniform ring:** the 4 MB ring is cut into eight 512 KB chunks. Leaving a chunk stamps it with the open batch;
+  entering one waits for its stamp (logged as "The uniform ring caught up with the GPU", every 600th time).
+  A chunk is the unit, not a frame, so a frame may use any number of them.
+- **Textures and non-ring buffers:** every draw stamps the textures it samples and the vertex and index buffers it
+  reads (`MarkUsed()`). A CPU write to one whose stamp has not retired either moves it to a fresh MEM2 block and
+  retires the old one (what a driver does for an orphaned buffer: `BufferData()` on the same block, a whole-store
+  `BufferSubData()`, a map with `InvalidateBuffer`, and the refresh of a texture's GPU copy from its host store),
+  or waits for the stamp (partial `BufferSubData()`, other maps, `MapStreamingTexels()`, whose caller writes in
+  place; Cinematics alternates two textures, so that wait has normally nothing to do). Persistent maps are never
+  synchronised there. Uniform buffers are never stamped and no longer flushed: the device copies their bound
+  ranges into its ring at draw time, so the GPU never reads them.
+- **Retired blocks** (destroyed or reallocated resources) are freed once the batch that was open at retirement has
+  retired, instead of two presents later.
+
+Checked in Cemu (OpenGL), with a temporary trace (not committed) that logged the batch, the submitted and retired
+stamps and the wait counts every 300 frames: main menu, the intro cinematic, `prince/castle1`, `rescue/psych3`
+(lighting), `rescue/beach2` (water) and `prince/castle1 1` (rescale) render as in milestone 5, 2-4 screenshots per
+run seconds apart, no flicker, missing tiles or garbage, no new warnings in the game log or "Unable to compile"
+in Cemu's. The GPU had not retired the frame at any present (3000 of 3000 frames in flight), the section fence wait
+ran once per frame and never blocked, and the uniform ring never caught up. GX2's timestamps in Cemu are OSTime
+values, not counters, which the code does not depend on (it only compares them).
+In these scenes nothing that a queued draw reads is rewritten (the camera stands still, and keyboard input did not
+reach the game in the headless setup with a guessed Cemu controller profile), so a second temporary build treated every
+resource drawn at least once as busy. The texture path then moved the GPU copy about 800 times during the intro
+(each cinematic frame re-uploads its texture) and the intro and menu rendered correctly. The buffer rename and wait
+paths still never ran: no custom vertex or index buffer (the tile-layer window cache) was rewritten after being
+drawn. They will first run when a layer scrolls; check tiles while scrolling on the console (or in Cemu with
+working input).
+
+Only the console can say what this buys: Cemu's frame rate means nothing, and how far the CPU runs ahead depends
+on the real GPU. Things to look at on hardware: whether `GX2WaitForFlip()` holds the CPU closer than one frame
+behind the scan-out than needed (`GX2GetSwapStatus()` was the alternative noted in milestone 4), how often the
+uniform ring warning appears, and frame time in the heaviest scenes (lighting plus a rescale shader).
+
 ## Backend contract (what to write)
 
 - `RhiFwd.h`: a `WITH_RHI_GX2` arm with capability macros (`RHI_CAP_SHADERS`, `_FRAMEBUFFERS`,
@@ -353,8 +408,9 @@ Not done / still open:
 4. **Done.** Textured sprite program: buffers, vertex format, one texture, uniforms. Main menu visible.
 5. **Done.** `--emit-gx2` for all programs and variants; render targets (lighting, blur, combine, water); all
    rescale shaders.
-6. Batching, instancing paths, fences, `RHI_CAP_*` tuning; remove the 1280x720 window cap if 1080p
-   output is cheap enough.
+6. A: **Done.** Fences, sectioned streaming and uniform rings, no `GX2DrawDone()` per frame.
+   Still open: batching and instancing paths (check on hardware), `RHI_CAP_*` tuning, and removing the 1280x720
+   window cap if 1080p output is cheap enough (both need hardware).
 7. Docs (`Docs/Consoles.dox`, `Docs/ShaderCompiler.dox`), CI, testing on the owner's console.
 
 ## Testing

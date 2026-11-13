@@ -109,7 +109,11 @@ namespace nCine::RHI::GX2
 	Gx2Device::RetiredBlock Gx2Device::_retiredBlocks[Gx2Device::RetiredBlockCount];
 
 	Gx2Memory::Block Gx2Device::_uniformRing;
-	std::uint32_t Gx2Device::_uniformRingOffset = 0;
+	std::uint32_t Gx2Device::_uniformChunk = 0;
+	std::uint32_t Gx2Device::_uniformChunkOffset = 0;
+	std::uint32_t Gx2Device::_uniformChunkTokens[Gx2Device::UniformRingChunkCount] = {};
+	std::uint32_t Gx2Device::_openBatch = 1;
+	OSTime Gx2Device::_batchStamps[Gx2Device::BatchStampCount] = {};
 	const Gx2ShaderProgram* Gx2Device::_lastProgram = nullptr;
 
 	// ── Session ──────────────────────────────────────────────────────────────────────────────────
@@ -172,7 +176,11 @@ namespace nCine::RHI::GX2
 			_contextState = nullptr;
 			return false;
 		}
-		_uniformRingOffset = 0;
+		_uniformChunk = 0;
+		_uniformChunkOffset = 0;
+		for (std::uint32_t i = 0; i < UniformRingChunkCount; i++) {
+			_uniformChunkTokens[i] = 0;
+		}
 		_lastProgram = nullptr;
 
 		GX2SetSwapInterval(_vsync ? 1 : 0);
@@ -294,7 +302,8 @@ namespace nCine::RHI::GX2
 		for (std::uint32_t i = 0; i < RetiredBlockCount; i++) {
 			if (!_retiredBlocks[i].Block.IsValid()) {
 				_retiredBlocks[i].Block = block;
-				_retiredBlocks[i].RetiredAtFrame = _frameCounter;
+				// Every command that can reference the block is in the open batch or an earlier one
+				_retiredBlocks[i].Token = _openBatch;
 				block = Gx2Memory::Block{};
 				return;
 			}
@@ -304,7 +313,7 @@ namespace nCine::RHI::GX2
 		Finish();
 		ReleaseRetiredBlocks(true);
 		_retiredBlocks[0].Block = block;
-		_retiredBlocks[0].RetiredAtFrame = _frameCounter;
+		_retiredBlocks[0].Token = _openBatch;
 		block = Gx2Memory::Block{};
 	}
 
@@ -315,7 +324,7 @@ namespace nCine::RHI::GX2
 			if (!retired.Block.IsValid()) {
 				continue;
 			}
-			if (!force && _frameCounter - retired.RetiredAtFrame < RetiredBlockFrameDelay) {
+			if (!force && !IsUseRetired(retired.Token)) {
 				continue;
 			}
 			Gx2Memory::Free(retired.Block);
@@ -662,9 +671,72 @@ namespace nCine::RHI::GX2
 
 	// ── Fences ───────────────────────────────────────────────────────────────────────────────────
 
+	// A batch is everything recorded between two FlushBatch() calls. Its token is a 32-bit sequence number (never
+	// 0) compared with wrap-around arithmetic; the GX2 timestamp of its submission is remembered for the last
+	// BatchStampCount batches, which is far more than can be in flight (one batch per frame plus the rare
+	// flush for a wait). A token older than that is answered with the oldest remembered stamp, which is later
+	// than its own and so only errs towards waiting.
+
+	std::uint32_t Gx2Device::GetUseToken()
+	{
+		return _openBatch;
+	}
+
+	void Gx2Device::FlushBatch()
+	{
+		// Submits the commands recorded so far; an empty command buffer is not submitted, and then the last
+		// submitted stamp still covers everything recorded before it
+		GX2Flush();
+		_batchStamps[_openBatch % BatchStampCount] = GX2GetLastSubmittedTimeStamp();
+		_openBatch++;
+		if (_openBatch == 0) {
+			_openBatch = 1;
+		}
+	}
+
+	OSTime Gx2Device::GetBatchStamp(std::uint32_t token)
+	{
+		const std::uint32_t age = _openBatch - token;
+		if (age > BatchStampCount) {
+			// The oldest remembered batch; its stamp is not earlier than this one's
+			token = _openBatch - BatchStampCount;
+		}
+		return _batchStamps[token % BatchStampCount];
+	}
+
+	bool Gx2Device::IsUseRetired(std::uint32_t token)
+	{
+		if (token == 0 || !_initialized) {
+			return true;
+		}
+		if (std::int32_t(token - _openBatch) >= 0) {
+			// Still being recorded, the GPU has not even seen it
+			return false;
+		}
+		return (GX2GetRetiredTimeStamp() >= GetBatchStamp(token));
+	}
+
+	bool Gx2Device::WaitForUse(std::uint32_t token)
+	{
+		if (token == 0 || !_initialized) {
+			return true;
+		}
+		if (std::int32_t(token - _openBatch) >= 0) {
+			FlushBatch();
+		}
+		const OSTime stamp = GetBatchStamp(token);
+		if (GX2GetRetiredTimeStamp() >= stamp) {
+			return true;
+		}
+		// Sleeps on GX2's timestamp event; it gives up (and returns false) only on a GPU timeout
+		return (GX2WaitTimeStamp(stamp) != FALSE);
+	}
+
 	FenceHandle Gx2Device::InsertFence()
 	{
-		return FenceHandle{};
+		// The fence is the open batch: RenderBuffersManager::Remap() inserts it right after the frame's draws were
+		// recorded, and the present submits them
+		return reinterpret_cast<FenceHandle>(std::uintptr_t(_openBatch));
 	}
 
 	void Gx2Device::DeleteFence(FenceHandle& fence)
@@ -674,9 +746,12 @@ namespace nCine::RHI::GX2
 
 	bool Gx2Device::ClientWaitFence(FenceHandle fence, std::uint64_t timeoutNs)
 	{
-		static_cast<void>(fence);
-		static_cast<void>(timeoutNs);
-		return true;
+		const std::uint32_t token = std::uint32_t(reinterpret_cast<std::uintptr_t>(fence));
+		if (timeoutNs == 0) {
+			return IsUseRetired(token);
+		}
+		// GX2 has no timed wait; GX2WaitTimeStamp() returns false on its own GPU timeout instead
+		return WaitForUse(token);
 	}
 
 	// ── Present ──────────────────────────────────────────────────────────────────────────────────
@@ -698,12 +773,9 @@ namespace nCine::RHI::GX2
 		// The copies clobber the pipeline state like a clear does
 		RestoreContextState();
 		GX2SwapScanBuffers();
-		GX2Flush();
-
-		// TODO (milestone 6): replace with fences and sectioned ring buffers. Until then the frame is finished
-		// here, so the next one may overwrite the engine's buffers and the uniform ring.
-		GX2DrawDone();
-		_uniformRingOffset = 0;
+		// Submits the frame without waiting for it: what the next frame writes is kept off memory this one still
+		// reads by the tokens (see the class documentation)
+		FlushBatch();
 
 		if (_firstFrame) {
 			// The scan-out is turned on only once there is a frame of ours in the scan buffers
@@ -726,17 +798,30 @@ namespace nCine::RHI::GX2
 	std::uint8_t* Gx2Device::AllocateUniformData(std::uint32_t size)
 	{
 		const std::uint32_t alignedSize = (size + GX2_UNIFORM_BLOCK_ALIGNMENT - 1) & ~std::uint32_t(GX2_UNIFORM_BLOCK_ALIGNMENT - 1);
-		if (alignedSize > UniformRingSize) {
+		if (alignedSize > UniformRingChunkSize) {
 			return nullptr;
 		}
-		if (_uniformRingOffset + alignedSize > UniformRingSize) {
-			// The frame has used the whole ring; once the GPU is done with it, it can start over
-			LOGW("The uniform ring is full, waiting for the GPU");
-			GX2DrawDone();
-			_uniformRingOffset = 0;
+		if (_uniformChunkOffset + alignedSize > UniformRingChunkSize) {
+			// Every draw that reads the chunk being left is in the open batch or an earlier one
+			_uniformChunkTokens[_uniformChunk] = _openBatch;
+			_uniformChunk = (_uniformChunk + 1) % UniformRingChunkCount;
+			_uniformChunkOffset = 0;
+			const std::uint32_t token = _uniformChunkTokens[_uniformChunk];
+			if (!IsUseRetired(token)) {
+				// The ring has come round to a chunk the GPU may still be reading: the CPU is far ahead, or one
+				// frame needs more than the whole ring. Not an error, but worth knowing when it happens often.
+				static std::uint32_t waits = 0;
+				if ((waits++ % 600) == 0) {
+					LOGW("The uniform ring caught up with the GPU, waiting ({} times so far)", waits);
+				}
+				if (!WaitForUse(token)) {
+					LOGW("Waiting for uniform ring chunk {} timed out", _uniformChunk);
+				}
+			}
+			_uniformChunkTokens[_uniformChunk] = 0;
 		}
-		std::uint8_t* data = static_cast<std::uint8_t*>(_uniformRing.Base) + _uniformRingOffset;
-		_uniformRingOffset += alignedSize;
+		std::uint8_t* data = static_cast<std::uint8_t*>(_uniformRing.Base) + _uniformChunk * UniformRingChunkSize + _uniformChunkOffset;
+		_uniformChunkOffset += alignedSize;
 		return data;
 	}
 
@@ -811,6 +896,7 @@ namespace nCine::RHI::GX2
 					(attribute.GetType() == std::uint32_t(VertexAttribType::UnsignedByte) ? 1u : 4u);
 			}
 			GX2SetAttribBuffer(attribute.GetIndex(), std::uint32_t(vbo->GetSize() - attribute.GetBaseOffset()), stride, base);
+			vbo->MarkUsed(_openBatch);
 		}
 	}
 
@@ -841,6 +927,7 @@ namespace nCine::RHI::GX2
 		for (const Gx2ShaderProgram::SamplerBinding& sampler : program->GetSamplers()) {
 			if (const Gx2Texture* texture = GetBoundTexture(sampler.EngineUnit)) {
 				texture->ApplySamplerState(sampler.HardwareUnit);
+				texture->MarkUsed(_openBatch);
 			}
 		}
 
@@ -854,6 +941,7 @@ namespace nCine::RHI::GX2
 				return;
 			}
 			const std::uint8_t* indices = static_cast<const std::uint8_t*>(ibo->GetGpuData()) + indexOffset;
+			ibo->MarkUsed(_openBatch);
 			// The base vertex is the index offset the vertex grouper adds to every fetched index
 			GX2DrawIndexedEx2(mode, count, indexFormat == IndexFormat::UInt32 ? GX2_INDEX_TYPE_U32 : GX2_INDEX_TYPE_U16,
 				indices, std::uint32_t(baseVertex), instances, 0);
