@@ -1019,8 +1019,14 @@ Cemu shows with coreinit logging on.
 @subsection consoles-wiiu-limits Limits and known issues
 
 -   With `Software`, lower <b>Rendering resolution</b> in the graphics options if the frame rate drops.
--   `GX2` renders at most 1280x720, scaled up by the console for a 1080p TV, and the same frame is shown
-    on the GamePad. The batching and instancing paths, and tile layers while scrolling, have not been
+    It always draws a 1280x720 frame, scaled up by the console for a 1080p TV.
+-   With `GX2`, <b>Screen resolution</b> in the graphics options picks 1280x720, 1920x1080 or `Auto`
+    @m_span{m-text m-dim} (default: 1920x1080 when the console outputs 1080i or 1080p, otherwise
+    1280x720) @m_endspan. It applies at the next start. If MEM1 has no room for a 1920x1080 screen
+    buffer, it falls back to 1280x720 and logs a warning. The level itself is still drawn at the
+    <b>Rendering resolution</b>; a bigger screen buffer sharpens the upscale, the rescale shaders and the
+    text. The same frame is shown on the GamePad.
+-   With `GX2`, the batching and instancing paths, and tile layers while scrolling, have not been
     checked on a console yet. Cemu's frame rate says nothing about the console's.
 -   No online multiplayer, update check or level pack downloads: the console's network stack is not
     brought up. Local multiplayer works with any mix of the GamePad, Pro Controllers and Wii Remotes.

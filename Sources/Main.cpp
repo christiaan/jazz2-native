@@ -465,9 +465,16 @@ void GameEventHandler::OnPreInitialize(AppConfiguration& config)
 		// also picks its own screen mode, from the performance preset)
 		config.Resolution.Set(LevelHandler::DefaultWidth, LevelHandler::DefaultHeight);
 #elif defined(DEATH_TARGET_WIIU)
+#	if defined(WITH_RHI_GX2)
+		// The GPU backend can fill 1080p, so the screen buffer size is a preference; the buffer is created once,
+		// so a change applies at the next start. GX2 scales it to the TV and the GamePad.
+		Vector2i screenSize = PreferencesCache::GetScreenResolutionSize(PreferencesCache::PreferredScreenResolution);
+		config.Resolution.Set(screenSize.X, screenSize.Y);
+#	else
 		// SDL2 sizes the TV render target after the system setting (up to 1920x1080), which is far too many pixels
 		// for the software rasterizer. The window is fixed at 720p instead and GX2 scales it to the TV and the GamePad.
 		config.Resolution.Set(1280, 720);
+#	endif
 		config.Fullscreen = false;
 		config.Resizable = false;
 #endif
