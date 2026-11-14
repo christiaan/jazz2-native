@@ -1123,12 +1123,18 @@ namespace nCine::RHI
 // `RHI_CAP_STREAMING_TEXTURES` holds: textures live in MEM2, which the CPU writes directly, so content
 // regenerated every frame (the cinematics) is written straight into a linear texture's storage and flushed
 // from the CPU cache on the next bind.
+//
+// `RHI_LINEAR_SUPERSAMPLE_RESOLVE` is not a capability but a cost choice: when the scene is supersampled and
+// nothing else asks for the antialiasing subpass, UpscaleRenderPass skips it and scales the supersampled texture
+// to the screen with a linear filter. On the console the 2880x1620 subpass and its bicubic resolve cost about
+// 11 ms with four players at 1080p; the linear resolve looks nearly the same (slightly softer, no more shimmer).
 #define RHI_CAP_SHADERS
 #define RHI_CAP_FRAMEBUFFERS
 #define RHI_CAP_TRANSPARENT_RENDER_TARGETS
 #define RHI_CAP_HEAVY_RESCALE_SHADERS
 #define RHI_CAP_BATCHING
 #define RHI_CAP_STREAMING_TEXTURES
+#define RHI_LINEAR_SUPERSAMPLE_RESOLVE
 
 namespace nCine::RHI::GX2
 {

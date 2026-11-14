@@ -11,8 +11,9 @@ splitscreen has correct colours on the console (2026-11-14), which confirms that
 come from Cemu's shader translation (see "Cemu tests"). `GX2` is now the default (milestone 7 is done).
 The console benchmark (2026-11-14, see "Console benchmark") led to turning the tile-layer window cache on for GX2
 and keeping batching on, and shows that four players and the 3xBRZ, SABR and CleanEdge rescale modes are GPU-bound at 1080p.
-The benchmark variants (see "Variant results") led to MEM1 render targets in the backend (2026-11-14, not yet
-on the console); split present and the linear resolve are next.
+The benchmark variants (see "Variant results") led to MEM1 render targets, the split present (B1) and the linear
+supersampling resolve (D) in the backend (2026-11-14, not yet on the console); one console run confirms them (step 4
+of "Next" under "Variant results").
 
 ## Decisions
 
@@ -781,12 +782,24 @@ Next, by expected gain:
    (18.7 MB) is not hinted: it would not fit beside the others, and step 3 removes it in the common case. The
    console run that confirms HOME is folded into the run after steps 2 and 3 (the owner decided to skip a
    separate one; see the "variants2" package above for what that run should also measure).
-2. Split present (B1 or B2) in the backend proper. Choose by pacing: B2 for a steady 30 when over budget,
-   or B1 with a swap interval of 2 whenever the GPU frame exceeds 16.7 ms.
-3. Drop the antialias subpass when only supersampling asks for it, and resolve linearly (D): in Cemu it looks
-   nearly the same as bicubic (C), slightly softer, with no more shimmer, and it saves 5.3 ms. Lighting at
-   50% with 3+ players (F) only if MEM1 + D stays short of 60.
-4. One short console run of MEM1 with B1/B2 and C, D, F (and lighting reset to 100%) to confirm.
+2. **Done in the backend (2026-11-14), not yet on the console.** Split present B1 in
+   `Gx2Device::PresentFrame()`: `FlushBatch()` after the frame's draws, then `WaitForPreviousFlip()` (the
+   batch that carried the previous swap, then `GX2WaitForFlip()` while `GX2GetSwapStatus()` shows a pending
+   swap, at most 4 times; skipped on the first frame after start or HOME), then the scan copies, the swap and a
+   second `FlushBatch()`; no wait at the end. B1 rather than B2: B2 leaves the GPU idle from the end of one
+   frame to the flip, so a frame of 15-16 ms plus the scan copies would fall to 30 fps, while B1 keeps the GPU
+   busy. B1's judder between 16.7 and 33.3 ms is left for now; if the console run shows it with MEM1 + D, add a
+   swap interval of 2 while frames miss the vsync (hysteresis needed, since at interval 2 the GPU time is hidden).
+   `BatchStampCount` stays 16 (two batches a frame, eight frames).
+3. **Done (2026-11-14), not yet on the console.** `RHI_LINEAR_SUPERSAMPLE_RESOLVE` (defined in the GX2 arm of
+   `RhiFwd.h`) makes `UpscaleRenderPass::Initialize()` skip the antialias subpass when the scene is supersampled,
+   the Antialiasing option is off and the rescale mode is None, and give the compose target a linear filter
+   (variant D). Rescale modes and Antialiasing keep the subpass. In Cemu (`prince/castle1`, 4 players, Zoom
+   out, 1080p) the level now draws with correct colours, since Cemu's broken `Antialiasing` program no longer
+   runs, and no 2880x1620 target is allocated. Lighting at 50% with 3+ players (F) only if MEM1 + D stays short
+   of 60.
+4. One short console run with the current backend (MEM1 + B1 + D, lighting at 100%): frame rate with 3 and 4
+   players with Zoom out and 4 without, a HOME round trip in a level, and a look at the TV picture with Zoom out.
 
 ## Backend contract (what to write)
 

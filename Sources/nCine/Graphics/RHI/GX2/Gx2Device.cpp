@@ -102,6 +102,7 @@ namespace nCine::RHI::GX2
 	bool Gx2Device::_inForeground = true;
 	bool Gx2Device::_vsync = true;
 	bool Gx2Device::_firstFrame = true;
+	std::uint32_t Gx2Device::_swapToken = 0;
 	std::uint32_t Gx2Device::_frameCounter = 0;
 	bool Gx2Device::_targetDirty = true;
 	Gx2Device::AppliedTarget Gx2Device::_applied = {};
@@ -199,6 +200,7 @@ namespace nCine::RHI::GX2
 		_initialized = true;
 		_inForeground = true;
 		_firstFrame = true;
+		_swapToken = 0;
 		InvalidateTarget();
 		_viewport = Recti(0, 0, _screenWidth, _screenHeight);
 		SetupInitialState();
@@ -269,6 +271,7 @@ namespace nCine::RHI::GX2
 			GX2InitColorBufferRegs(&_screenBuffer);
 		}
 		_firstFrame = true;
+		_swapToken = 0;
 		_targetDirty = true;
 		LOGI("GX2 device returning to foreground");
 	}
@@ -807,6 +810,16 @@ namespace nCine::RHI::GX2
 			return;
 		}
 
+		// The frame is split in two submissions so the CPU can record the next frame while the GPU draws this one.
+		// The draws go to the GPU first; only the scan copies have to wait. The scan buffers are double-buffered
+		// (SDL sets them up), and nothing on the GPU side holds back a copy, so a copy recorded while the previous
+		// swap has not flipped yet would draw into the buffer still being shown. Measured on the console, this took
+		// four players with Zoom out from 20 to 32 fps (MEM2 targets) and four players without it from 51 to 60 fps.
+		FlushBatch();
+		if (!_firstFrame) {
+			WaitForPreviousFlip();
+		}
+
 		// The copy scales the screen buffer to each scan buffer's own resolution (the TV mode SDL picked, and
 		// 854x480 on the GamePad)
 		GX2CopyColorBufferToScanBuffer(&_screenBuffer, GX2_SCAN_TARGET_TV);
@@ -814,8 +827,9 @@ namespace nCine::RHI::GX2
 		// The copies clobber the pipeline state like a clear does
 		RestoreContextState();
 		GX2SwapScanBuffers();
-		// Submits the frame without waiting for it: what the next frame writes is kept off memory this one still
-		// reads by the tokens (see the class documentation)
+		// Submits the copies and the swap without waiting for them: what the next frame writes is kept off memory
+		// this one still reads by the tokens (see the class documentation)
+		_swapToken = _openBatch;
 		FlushBatch();
 
 		if (_firstFrame) {
@@ -825,13 +839,34 @@ namespace nCine::RHI::GX2
 			_firstFrame = false;
 		}
 
-		// Keeps the CPU at most one frame ahead of the scan-out. TODO (milestone 6): measure on hardware
-		// whether waiting for the swap before the previous one (GX2GetSwapStatus) is worth the extra latency
-		GX2WaitForFlip();
+		// No wait here: the next present waits for this swap to flip before its own scan copies, which keeps the
+		// CPU at most about one frame ahead of the scan-out
 
 		_frameCounter++;
 		ReleaseRetiredBlocks();
 		InvalidateTarget();
+	}
+
+	void Gx2Device::WaitForPreviousFlip()
+	{
+		// GX2 counts a swap only once the GPU has executed it, so the batch that carries the previous swap is waited
+		// for first; GX2WaitForFlip() then returns at the next flip, or at once when none is pending. The loop is
+		// bounded so that counts which never meet (e.g. while the scan-out is off) cannot hang the game.
+		if (_swapToken != 0) {
+			const OSTime stamp = GetBatchStamp(_swapToken);
+			if (GX2GetRetiredTimeStamp() < stamp) {
+				GX2WaitTimeStamp(stamp);
+			}
+		}
+		for (std::int32_t i = 0; i < 4; i++) {
+			std::uint32_t swapCount = 0, flipCount = 0;
+			OSTime lastFlip = 0, lastVsync = 0;
+			GX2GetSwapStatus(&swapCount, &flipCount, &lastFlip, &lastVsync);
+			if (std::int32_t(swapCount - flipCount) <= 0) {
+				break;
+			}
+			GX2WaitForFlip();
+		}
 	}
 
 	// ── Draws ────────────────────────────────────────────────────────────────────────────────────

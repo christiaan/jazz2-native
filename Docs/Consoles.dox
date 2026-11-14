@@ -997,6 +997,11 @@ Cemu shows with coreinit logging on.
     for a 1920x1080 screen buffer at all, it falls back to 1280x720 and logs a warning. The level itself is still drawn at the
     <b>Rendering resolution</b>; a bigger screen buffer sharpens the upscale, the rescale shaders and the
     text. The same frame is shown on the GamePad.
+-   With `GX2` and <b>Zoom out</b> with three or four players, the supersampled scene is scaled to the
+    screen with a plain linear filter instead of the antialiasing pass other platforms use, which costs
+    the console about 11 ms per frame at 1080p. Turning on <b>Antialiasing</b> or a rescale mode brings
+    the full pass back. The GPU draws one frame while the game prepares the next, so the picture is up
+    to one frame later than with `Software`.
 -   With `GX2`, the batching and instancing paths, and tile layers while scrolling, have not been
     checked on a console yet. Cemu's frame rate says nothing about the console's.
 -   No online multiplayer, update check or level pack downloads: the console's network stack is not
