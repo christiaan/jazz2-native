@@ -653,7 +653,8 @@ test; all are off outside the benchmark. How each variant came out, where it dif
 - Added to the benchmark: GPU timer rows `scanCopyTV` and `scanCopyDRC`; per-test counts of uniform-ring waits
   and `RetireBlock()` falling back to `Finish()` (`ringWaits retireFinishes` column); the name table is
   cleared at each test; the batching-off phase is gone (one 15 s phase per test); `#seconds <warmup>
-  <measure>` in the test list overrides the 6 s / 15 s.
+  <measure>` in the test list overrides the 6 s / 15 s; `#still` keeps the players standing (for visual
+  comparisons: every variant then shows the same frame).
 
 Cemu check (2026-11-14, correctness only): all 11 variants with four players and Zoom out, B13 with one player
 and with four without Zoom out, C on `rescue/beach2`, and the MEM1 build with A, B13, C and F, ran to the end
@@ -727,16 +728,37 @@ copies keep every frame on a two-vsync rhythm. Once a frame fits
   20 fps with Zoom out. Drop it.
 - **The 2880x1620 antialias subpass (C) costs 6.2 ms** (MEM2) and the bicubic screen pass costs 5.3 ms
   more than a linear one (D: screen pass 8.7 to 3.4 ms). The bicubic screen pass is shader-bound: MEM1
-  barely changes it (8.07 ms). The whole supersampled chain costs about 21 ms over E (no supersampling,
-  60 fps at 9.9 ms).
+  barely changes it (8.07 ms). E (no supersampling, 60 fps at 9.9 ms) is not a cheaper Zoom out: the
+  Cemu comparison below shows it falls back to the Zoom-out-off framing, so its cost is that of Zoom out off.
 - **MEM1 + C reaches 56-57 fps, MEM1 + F 59.6-59.9 fps** with 4 players and Zoom out, but F's margin is
   thin (GPU 15.4-16.5 ms plus scan copies, a few missed frames). MEM1 + D was not tested; from the numbers
   above it should leave several ms of headroom (screen pass 8.1 to perhaps 1.5-2 ms).
 - **GamePad copy**: 1.6 ms MEM2, 0.6 ms MEM1. G/G2 gain 1-2 fps at best; not worth freezing the GamePad.
 - The CPU stays at 6-12 ms with 4 players; it is not the limit after the split present.
 
-Open: the owner's visual verdict on C, D and E (shimmer, softness) and the result of the HOME round trip
-with the MEM1 package; the log of that session was overwritten.
+The owner saw glimpses of the GamePad during the MEM1 session (the one run first) and the picture looked fine,
+so MEM1 render targets draw correctly on the console (the GamePad copy reads the same screen buffer as the TV).
+
+**Cemu comparison of A, C, D and E (2026-11-14).** The TV was off during the console run, so nobody judged
+the variants by eye; they were compared in Cemu instead. `#still` in a test list (added to the hook) keeps the
+players standing, so every variant shows the same frame; Cemu ran fullscreen on a 1920x1080 Xvfb screen so the
+capture is the TV image 1:1 (`prince/castle1`, 4 players, Zoom out). Cemu runs the `Antialiasing` program
+(used by A and C) with wrong green and blue (the R123 bug above), so A and C come out magenta with horizontal
+stripes; only the red channel is right, and the comparison uses that. Saved as
+`~/jazz2-wiiu-test/console-bench/variants2/cemu-still-ACDE-red-3x.png`.
+- C and D look almost the same as each other and as A at 3x zoom; D is slightly softer. Mean |Laplacian| of
+  the red channel: A 16.8, C 13.7, D 11.3.
+- Shimmer proxy: 1440 to 1920 is a 3:4 resample, so edge strength per output column or row, grouped by
+  position mod 4, shows how much sharpness pulses as the image moves. C and D are even (max/min 1.08-1.09 by
+  column, 1.21 by row). A is uneven (1.47 by column, 3.41 by row), but A's stripes in Cemu make that
+  untrustworthy; on the console A is the look players already have.
+- E is a different picture: the camera falls back to the Zoom-out-off view (larger sprites, less of the
+  level visible), so it is not an option for Zoom out.
+
+Open: the HOME round trip with the MEM1 package (not done), and the owner's look at C and D on a TV (optional
+after the Cemu comparison). A follow-up run covers both and measures MEM1 + D for the first time: `~/jazz2-wiiu-test/console-bench/variants2/` (a 6-test
+`bench-tests-mem1.txt` for the installed MEM1 package and a `README.txt` with the steps, including resetting
+lighting to 100% first).
 
 Next, by expected gain:
 1. MEM1 render targets in the backend proper (screen buffer, compose target, per-player scene targets), with
@@ -744,8 +766,9 @@ Next, by expected gain:
    trip on the console.
 2. Split present (B1 or B2) in the backend proper. Choose by pacing: B2 for a steady 30 when over budget,
    or B1 with a swap interval of 2 whenever the GPU frame exceeds 16.7 ms.
-3. Drop the antialias subpass when only supersampling asks for it (C); choose bicubic (C) or linear (D) by
-   the owner's visual verdict; lighting at 50% with 3+ players (F) if C alone stays short of 60.
+3. Drop the antialias subpass when only supersampling asks for it, and resolve linearly (D): in Cemu it looks
+   nearly the same as bicubic (C), slightly softer, with no more shimmer, and it saves 5.3 ms. Lighting at
+   50% with 3+ players (F) only if MEM1 + D stays short of 60.
 4. One short console run of MEM1 with B1/B2 and C, D, F (and lighting reset to 100%) to confirm.
 
 ## Backend contract (what to write)
