@@ -38,8 +38,10 @@ namespace nCine::RHI::GX2
 		<b>Background.</b> Between @ref EnterBackground() and @ref EnterForeground() (the
 		`SDL_APP_WILLENTERBACKGROUND` / `SDL_APP_DIDENTERFOREGROUND` events) nothing is submitted: clears,
 		draws and presents return immediately, because SDL is about to release the foreground and its scan
-		buffers. All of this backend's memory is MEM2 (see @ref Gx2Memory), so nothing has to be recreated
-		when the application comes back; only the context state is made current again.
+		buffers and destroy its MEM1 heap. Before that, every block of this backend in MEM1 (the screen buffer and
+		the render targets that asked for it, see @ref Gx2Memory) is freed; when the application comes back the
+		screen buffer is allocated again, the render targets on their next use, and the context state is made
+		current again. Everything in MEM2 survives.
 
 		<b>Draws.</b> A draw binds the program's vertex, pixel and fetch shaders, fills the stages'
 		loose-uniform blocks and copies the ranges the pipeline bound for the explicit blocks into a uniform
@@ -189,6 +191,10 @@ namespace nCine::RHI::GX2
 			has retired (checked at every present).
 		*/
 		static void RetireBlock(Gx2Memory::Block& block);
+		/** @brief Whether MEM1 may be allocated right now: only in the foreground, while SDL's MEM1 heap exists (see @ref Gx2Memory) */
+		static inline bool CanAllocMem1() {
+			return CanSubmit();
+		}
 
 		/** @brief Monotonic count of presented frames */
 		static std::uint32_t GetFrameCounter();
@@ -330,6 +336,8 @@ namespace nCine::RHI::GX2
 		/** @brief Program whose shaders are currently set on the GPU */
 		static const Gx2ShaderProgram* _lastProgram;
 
+		/** @brief Allocates the screen colour buffer's image for `_screenBuffer.surface`, in MEM1 if it fits */
+		static bool AllocScreenMemory();
 		/** @brief Whether GX2 work may be submitted right now */
 		static inline bool CanSubmit() {
 			return (_initialized && _inForeground);

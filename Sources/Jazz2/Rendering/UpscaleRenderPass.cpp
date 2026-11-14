@@ -191,6 +191,9 @@ namespace Jazz2::Rendering
 		_target->SetMinFiltering(SamplerFilter::Nearest);
 		_target->SetMagFiltering(SamplerFilter::Nearest);
 		_target->SetWrap(SamplerWrapping::ClampToEdge);
+		// The compose target is drawn into and read every frame, so worth fast memory where the backend has it (the HUD
+		// overlay is cheap and stays out of the way)
+		_target->SetPreferFastMemory(!overlay);
 
 		// The overlay layer is only partially covered by the HUD, so unlike the scene (which is fully repainted every
 		// frame and uses ClearMode::Never) it must be cleared to fully transparent each frame

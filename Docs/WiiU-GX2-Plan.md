@@ -11,6 +11,8 @@ splitscreen has correct colours on the console (2026-11-14), which confirms that
 come from Cemu's shader translation (see "Cemu tests"). `GX2` is now the default (milestone 7 is done).
 The console benchmark (2026-11-14, see "Console benchmark") led to turning the tile-layer window cache on for GX2
 and keeping batching on, and shows that four players and the 3xBRZ, SABR and CleanEdge rescale modes are GPU-bound at 1080p.
+The benchmark variants (see "Variant results") led to MEM1 render targets in the backend (2026-11-14, not yet
+on the console); split present and the linear resolve are next.
 
 ## Decisions
 
@@ -768,9 +770,17 @@ and to re-measure: rebase it onto the backend work, or cherry-pick it onto a scr
 overrides them, so a run no longer leaves lighting at 50%. The variants2 packages were built before this fix.
 
 Next, by expected gain:
-1. MEM1 render targets in the backend proper (screen buffer, compose target, per-player scene targets), with
-   MEM2 fallback and release/reallocation in `EnterBackground()`/`EnterForeground()`; confirm a HOME round
-   trip on the console.
+1. **Done in the backend (2026-11-14), HOME round trip still to be confirmed on the console.** MEM1 render
+   targets: `Gx2Memory::AllocColorSurfaceMem1()` (GX2R through SDL's allocator, as in the hook),
+   `Texture::SetPreferFastMemory()` (a no-op on other backends) set on the per-player scene targets and the
+   non-overlay compose target, and the screen buffer tries MEM1 first. All fall back to MEM2. `EnterBackground()`
+   frees every MEM1 block after `GX2DrawDone()` (retired blocks, `Gx2Texture::ReleaseMem1Copies()`, the screen
+   buffer); `EnterForeground()` reallocates the screen buffer, and the targets reallocate on their next use. In Cemu
+   (`prince/castle1`, 4 players, Zoom out, 1080p) the screen (8.4 MB), compose 1440x810 and four 720x406 scene
+   targets all landed in MEM1, 18.0 MB in total, and the level drew as before. The 2880x1620 antialias target
+   (18.7 MB) is not hinted: it would not fit beside the others, and step 3 removes it in the common case. The
+   console run that confirms HOME is folded into the run after steps 2 and 3 (the owner decided to skip a
+   separate one; see the "variants2" package above for what that run should also measure).
 2. Split present (B1 or B2) in the backend proper. Choose by pacing: B2 for a steady 30 when over budget,
    or B1 with a swap interval of 2 whenever the GPU frame exceeds 16.7 ms.
 3. Drop the antialias subpass when only supersampling asks for it, and resolve linearly (D): in Cemu it looks

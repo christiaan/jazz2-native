@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+struct GX2Surface;
+
 namespace nCine::RHI::GX2
 {
 	/**
@@ -15,12 +17,15 @@ namespace nCine::RHI::GX2
 		be flushed with @ref FlushCpuWrites() (`GX2Invalidate()` with the matching mode, which also drops the
 		GPU's own cache lines for that range) before the draw that reads it is submitted.
 
-		<b>Everything is in MEM2 for now.</b> wiiu-sdl2 takes all of MEM1 and the foreground heap when its
-		video driver starts, and it frees that MEM1 heap whenever the application is sent to the background
-		(HOME menu), so anything the backend kept there would have to be destroyed and recreated around each
-		trip. MEM2 survives the background, so every block - buffers, textures, the screen colour and depth
-		buffers - comes from the default heap (`MEMAllocFromDefaultHeapEx()`). Moving the render targets to
-		MEM1 is a later optimisation that needs measuring on hardware first.
+		<b>MEM2 by default, MEM1 for the hottest render targets.</b> Buffers, ordinary textures and anything else
+		that has to survive the background come from the default heap in MEM2 (`MEMAllocFromDefaultHeapEx()`).
+		MEM1 (32 MB of fast on-chip memory) is owned by wiiu-sdl2: its video driver puts a heap over all of it
+		when the application gets the foreground and destroys that heap when it loses it (HOME menu). Colour
+		surfaces are taken from that heap through GX2R (@ref AllocColorSurfaceMem1()), which allocates with the
+		allocator SDL installed (`GX2RSetAllocator()`). Such a block is only valid while in the foreground:
+		@ref Gx2Device::EnterBackground() frees every one of them and the owners allocate them again when next
+		used. On the console, render targets in MEM1 halve the time of every pass that draws into them
+		(Docs/WiiU-GX2-Plan.md, "Variant results").
 	*/
 	namespace Gx2Memory
 	{
@@ -29,9 +34,14 @@ namespace nCine::RHI::GX2
 		{
 			void* Base = nullptr;
 			std::uint32_t Size = 0;
+			/** @brief GX2R resource flags of a block from MEM1 (@ref AllocColorSurfaceMem1()), 0 for MEM2 */
+			std::uint32_t Mem1Flags = 0;
 
 			inline bool IsValid() const {
 				return (Base != nullptr);
+			}
+			inline bool IsMem1() const {
+				return (Mem1Flags != 0);
 			}
 		};
 
@@ -44,6 +54,14 @@ namespace nCine::RHI::GX2
 			                  and surfaces whatever `GX2CalcSurfaceSizeAndAlignment()` reports
 		*/
 		Block Alloc(std::uint32_t size, std::uint32_t alignment);
+		/**
+			@brief Allocates the image of a colour surface in MEM1, or returns an invalid block if it doesn't fit
+
+			Only valid while the application is in the foreground (see the namespace description). The surface's
+			size and alignment must have been computed (`GX2CalcSurfaceSizeAndAlignment()`); the surface itself is
+			not modified. The block is released with @ref Free() like any other.
+		*/
+		Block AllocColorSurfaceMem1(const GX2Surface& surface);
 		/** @brief Releases a block and resets it; the caller must know the GPU is done with it */
 		void Free(Block& block);
 
@@ -52,5 +70,7 @@ namespace nCine::RHI::GX2
 
 		/** @brief Bytes currently allocated through @ref Alloc() */
 		std::uint32_t GetAllocatedBytes();
+		/** @brief Bytes currently allocated through @ref AllocColorSurfaceMem1() */
+		std::uint32_t GetMem1Bytes();
 	}
 }

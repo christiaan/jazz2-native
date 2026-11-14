@@ -157,17 +157,17 @@ namespace nCine::RHI::GX2
 		surface.use = GX2_SURFACE_USE_TEXTURE_COLOR_BUFFER_TV;
 		surface.tileMode = GX2_TILE_MODE_DEFAULT;
 		GX2CalcSurfaceSizeAndAlignment(&surface);
-		_screenMemory = Gx2Memory::Alloc(surface.imageSize, surface.alignment);
+		AllocScreenMemory();
 		if (!_screenMemory.IsValid() && (_screenWidth > 1280 || _screenHeight > 720)) {
-			// The buffer shares MEM1 with SDL's scan buffers; a 1080p one that doesn't fit falls back to 720p, the
-			// drawable size follows it (see SdlGfxDevice::QueryDrawableSize())
+			// A 1080p buffer that fits neither in MEM1 nor in MEM2 falls back to 720p, the drawable size follows it
+			// (see SdlGfxDevice::QueryDrawableSize())
 			LOGW("Failed to allocate the {}x{} screen colour buffer ({} bytes), falling back to 1280x720", _screenWidth, _screenHeight, surface.imageSize);
 			_screenWidth = 1280;
 			_screenHeight = 720;
 			surface.width = std::uint32_t(_screenWidth);
 			surface.height = std::uint32_t(_screenHeight);
 			GX2CalcSurfaceSizeAndAlignment(&surface);
-			_screenMemory = Gx2Memory::Alloc(surface.imageSize, surface.alignment);
+			AllocScreenMemory();
 		}
 		if (!_screenMemory.IsValid()) {
 			LOGE("Failed to allocate the {}x{} screen colour buffer ({} bytes)", _screenWidth, _screenHeight, surface.imageSize);
@@ -214,6 +214,7 @@ namespace nCine::RHI::GX2
 		}
 		Finish();
 		ReleaseRetiredBlocks(true);
+		Gx2Texture::ReleaseMem1Copies();
 		Gx2Memory::Free(_uniformRing);
 		Gx2Memory::Free(_screenMemory);
 		std::memset(&_screenBuffer, 0, sizeof(_screenBuffer));
@@ -233,9 +234,17 @@ namespace nCine::RHI::GX2
 		if (!_initialized || !_inForeground) {
 			return;
 		}
-		// SDL releases the foreground (and frees its scan buffers) on its next event pump, so the GPU has to
-		// be done with everything already queued before that happens
+		// SDL releases the foreground (and frees its scan buffers and its MEM1 heap) on its next event pump, so the
+		// GPU has to be done with everything already queued before that happens
 		GX2DrawDone();
+		// Every block in MEM1 goes now, while SDL's heap still exists: retired ones, render targets (allocated again
+		// when next drawn into, their contents are redrawn every frame) and the screen buffer (in EnterForeground())
+		ReleaseRetiredBlocks(true);
+		Gx2Texture::ReleaseMem1Copies();
+		if (_screenMemory.IsMem1()) {
+			Gx2Memory::Free(_screenMemory);
+			_screenBuffer.surface.image = nullptr;
+		}
 		_inForeground = false;
 		LOGI("GX2 device entering background");
 	}
@@ -245,10 +254,20 @@ namespace nCine::RHI::GX2
 		if (!_initialized || _inForeground) {
 			return;
 		}
-		// SDL has reinitialised its own side (scan buffers, MEM1 heap); everything of ours lives in MEM2 and
-		// survived, so only the context state has to be made current again
+		// SDL has reinitialised its own side (scan buffers, MEM1 heap); what lives in MEM2 survived, the screen
+		// buffer is allocated again if it was in MEM1 and the render targets follow on their next use
 		RestoreContextState();
 		_inForeground = true;
+		if (!_screenMemory.IsValid()) {
+			if (!AllocScreenMemory()) {
+				// Nothing to draw into; draws and presents are skipped until the device is recreated
+				LOGE("Failed to allocate the {}x{} screen colour buffer again", _screenWidth, _screenHeight);
+				_inForeground = false;
+				return;
+			}
+			_screenBuffer.surface.image = _screenMemory.Base;
+			GX2InitColorBufferRegs(&_screenBuffer);
+		}
 		_firstFrame = true;
 		_targetDirty = true;
 		LOGI("GX2 device returning to foreground");
@@ -297,6 +316,17 @@ namespace nCine::RHI::GX2
 		if (_initialized) {
 			GX2DrawDone();
 		}
+	}
+
+	bool Gx2Device::AllocScreenMemory()
+	{
+		// MEM1 first: the screen buffer is drawn into by the last pass and read by both scan-buffer copies
+		const GX2Surface& surface = _screenBuffer.surface;
+		_screenMemory = Gx2Memory::AllocColorSurfaceMem1(surface);
+		if (!_screenMemory.IsValid()) {
+			_screenMemory = Gx2Memory::Alloc(surface.imageSize, surface.alignment);
+		}
+		return _screenMemory.IsValid();
 	}
 
 	void Gx2Device::RetireBlock(Gx2Memory::Block& block)
