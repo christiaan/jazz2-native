@@ -760,6 +760,13 @@ after the Cemu comparison). A follow-up run covers both and measures MEM1 + D fo
 `bench-tests-mem1.txt` for the installed MEM1 package and a `README.txt` with the steps, including resetting
 lighting to 100% first).
 
+The benchmark hook (runner, GPU timers, variant switches, MEM1 build) is committed on its own branch,
+`wiiu-bench` (commit `f7610e13`, on top of `54e0d273`), not on `wiiu-port`. Every hook there is marked
+`WIIU_TEST_HOOK`. Use it to copy from (the MEM1 allocation and HOME release in `Gx2Memory`/`Gx2Texture`/`Gx2Device`)
+and to re-measure: rebase it onto the backend work, or cherry-pick it onto a scratch branch. Since that commit
+`PreferencesCache::Save()` writes the owner's own rescale mode, Zoom out and lighting values while a benchmark
+overrides them, so a run no longer leaves lighting at 50%. The variants2 packages were built before this fix.
+
 Next, by expected gain:
 1. MEM1 render targets in the backend proper (screen buffer, compose target, per-player scene targets), with
    MEM2 fallback and release/reallocation in `EnterBackground()`/`EnterForeground()`; confirm a HOME round
