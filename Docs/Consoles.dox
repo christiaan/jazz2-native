@@ -992,8 +992,9 @@ Cemu shows with coreinit logging on.
     It always draws a 1280x720 frame, scaled up by the console for a 1080p TV.
 -   With `GX2`, <b>Screen resolution</b> in the graphics options picks 1280x720, 1920x1080 or `Auto`
     @m_span{m-text m-dim} (default: 1920x1080 when the console outputs 1080i or 1080p, otherwise
-    1280x720) @m_endspan. It applies at the next start. If MEM1 has no room for a 1920x1080 screen
-    buffer, it falls back to 1280x720 and logs a warning. The level itself is still drawn at the
+    1280x720) @m_endspan. It applies at the next start. The screen buffer and the main render targets
+    go in MEM1, the console's fast memory, while it has room, and in MEM2 otherwise; if there is no room
+    for a 1920x1080 screen buffer at all, it falls back to 1280x720 and logs a warning. The level itself is still drawn at the
     <b>Rendering resolution</b>; a bigger screen buffer sharpens the upscale, the rescale shaders and the
     text. The same frame is shown on the GamePad.
 -   With `GX2`, the batching and instancing paths, and tile layers while scrolling, have not been

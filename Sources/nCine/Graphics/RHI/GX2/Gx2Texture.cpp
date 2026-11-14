@@ -74,13 +74,31 @@ namespace nCine::RHI::GX2
 
 	}
 
+	namespace
+	{
+		// Textures whose GPU copy is in MEM1, so EnterBackground() can free them all; MEM1 holds only a handful
+		constexpr std::uint32_t MaxMem1Textures = 32;
+		const Gx2Texture* _mem1Textures[MaxMem1Textures];
+		std::uint32_t _mem1TextureCount = 0;
+
+		void ForgetMem1Texture(const Gx2Texture* texture)
+		{
+			for (std::uint32_t i = 0; i < _mem1TextureCount; i++) {
+				if (_mem1Textures[i] == texture) {
+					_mem1Textures[i] = _mem1Textures[--_mem1TextureCount];
+					return;
+				}
+			}
+		}
+	}
+
 	std::uint32_t Gx2Texture::_nextHandle = 1;
 
 	Gx2Texture::Gx2Texture(TextureTarget target)
 		: _handle(_nextHandle++), _target(target), _format(PixelFormat::Unknown), _uploadFormat(PixelFormat::Unknown),
 			_width(0), _height(0), _strideBytes(0),
 			_minFilter(nCine::SamplerFilter::Nearest), _magFilter(nCine::SamplerFilter::Nearest), _wrap(SamplerWrapping::ClampToEdge),
-			_textureUnit(0), _isRenderTarget(false), _gpuValid(false), _contentsDirty(false), _streamingDirty(false),
+			_textureUnit(0), _isRenderTarget(false), _preferFastMemory(false), _gpuValid(false), _contentsDirty(false), _streamingDirty(false),
 			_samplerDirty(true), _lastUse(0)
 	{
 		_swizzle[0] = SwizzleChannel::Red;
@@ -100,6 +118,9 @@ namespace nCine::RHI::GX2
 
 	void Gx2Texture::ReleaseGpu() const
 	{
+		if (_gpuBlock.IsMem1()) {
+			ForgetMem1Texture(this);
+		}
 		if (_gpuBlock.IsValid()) {
 			// The GPU may still be reading these texels from a frame that has not finished, so the block is
 			// handed to the device's retirement list rather than freed under the hardware
@@ -160,6 +181,29 @@ namespace nCine::RHI::GX2
 		_contentsDirty = !isRenderTarget;
 	}
 
+	void Gx2Texture::SetPreferFastMemory(bool value)
+	{
+		if (value == _preferFastMemory) {
+			return;
+		}
+		_preferFastMemory = value;
+		if (_isRenderTarget) {
+			// Moved on the next use; a render target's texels are redrawn, so nothing is copied
+			ReleaseGpu();
+		}
+	}
+
+	void Gx2Texture::ReleaseMem1Copies()
+	{
+		for (std::uint32_t i = 0; i < _mem1TextureCount; i++) {
+			const Gx2Texture* texture = _mem1Textures[i];
+			Gx2Memory::Free(texture->_gpuBlock);
+			texture->_gpuValid = false;
+			texture->_lastUse = 0;
+		}
+		_mem1TextureCount = 0;
+	}
+
 	bool Gx2Texture::EnsureGpuTexture() const
 	{
 		if (_width <= 0 || _height <= 0 || _format != PixelFormat::RGBA8) {
@@ -189,8 +233,19 @@ namespace nCine::RHI::GX2
 			GX2CalcSurfaceSizeAndAlignment(&surface);
 
 			if (_gpuBlock.Size < surface.imageSize) {
+				if (_gpuBlock.IsMem1()) {
+					ForgetMem1Texture(this);
+				}
 				Gx2Device::RetireBlock(_gpuBlock);
-				_gpuBlock = Gx2Memory::Alloc(surface.imageSize, surface.alignment);
+				if (_isRenderTarget && _preferFastMemory && _mem1TextureCount < MaxMem1Textures && Gx2Device::CanAllocMem1()) {
+					_gpuBlock = Gx2Memory::AllocColorSurfaceMem1(surface);
+					if (_gpuBlock.IsValid()) {
+						_mem1Textures[_mem1TextureCount++] = this;
+					}
+				}
+				if (!_gpuBlock.IsValid()) {
+					_gpuBlock = Gx2Memory::Alloc(surface.imageSize, surface.alignment);
+				}
 				if (!_gpuBlock.IsValid()) {
 					LOGE("Failed to allocate {} bytes for a {}x{} texture", surface.imageSize, _width, _height);
 					return false;

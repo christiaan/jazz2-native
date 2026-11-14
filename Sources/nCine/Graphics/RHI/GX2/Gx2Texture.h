@@ -134,6 +134,21 @@ namespace nCine::RHI::GX2
 		}
 		/** @brief Marks the texture as (or no longer as) a color render target (the GPU copy is rebuilt, since the GPU writes it from then on) */
 		void SetRenderTarget(bool isRenderTarget);
+		/**
+			@brief Asks for the render target's texels to go in MEM1 (see @ref Gx2Memory)
+
+			Applies from the next allocation of the GPU copy, and only while the texture is a render target;
+			it falls back to MEM2 when MEM1 is full. Meant for the few targets drawn into and read every
+			frame (the player scene targets, the compose target), which then cost about half the GPU time.
+		*/
+		void SetPreferFastMemory(bool value);
+		/**
+			@brief Frees every GPU copy that lives in MEM1, before SDL destroys its MEM1 heap (the GPU must be idle)
+
+			Their owners allocate them again the next time they are drawn into; their contents are lost, which is
+			fine for render targets that are redrawn every frame.
+		*/
+		static void ReleaseMem1Copies();
 		/** @brief Returns a writable base pointer of the level-0 host store */
 		inline std::uint8_t* MutablePixels() {
 			return (_pixels.empty() ? nullptr : _pixels.data());
@@ -218,6 +233,7 @@ namespace nCine::RHI::GX2
 		mutable std::uint32_t _textureUnit;
 		SmallVector<std::uint8_t, 0> _pixels;
 		bool _isRenderTarget;
+		bool _preferFastMemory;
 
 		// GPU copy, created lazily on the first bind (mutable so the const bind-time accessors can
 		// materialize it). `_contentsDirty` forces a refresh from the host store, `_streamingDirty` a cache
