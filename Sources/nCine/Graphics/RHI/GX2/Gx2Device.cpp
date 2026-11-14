@@ -7,7 +7,10 @@
 #include "Gx2BufferObject.h"
 
 #include "../../../../Main.h"
+#include "../../../Base/FrameStatistics.h" // WIIU_TEST_HOOK (local only, do not commit)
+#include "../../../../WiiUBench.h" // WIIU_TEST_HOOK (local only, do not commit)
 
+#include <algorithm> // WIIU_TEST_HOOK (local only, do not commit)
 #include <cstring>
 #include <malloc.h>
 
@@ -22,6 +25,185 @@
 #include <gx2/shaders.h>
 #include <gx2/state.h>
 #include <gx2/swap.h>
+
+// WIIU_TEST_HOOK (local only, do not commit): GPU timers. Every viewport drawn and the scan-buffer copies sample
+// the GPU clock at the bottom of the pipe (when all earlier work has finished); the stamps are read three frames
+// later, when the GPU is done with them. A segment's time is from its stamp to the next one. Cemu writes an
+// invalid value for every sample, so only a console gives numbers.
+#include <coreinit/cache.h>
+#include <cstdio>
+extern "C" void GX2SampleBottomGPUCycle(std::uint64_t* cycle);
+extern "C" std::uint64_t GX2GPUTimeToCPUTime(std::uint64_t time);
+
+namespace WiiUGpuProf
+{
+	static constexpr std::int32_t MaxMarks = 96, Sets = 4, MaxNames = 96, LabelSize = 32;
+	struct Mark { char Label[LabelSize]; std::uint32_t Draws; };
+	struct Name { const void* Key; char Text[20]; };
+	struct Acc { char Label[LabelSize]; double Us; double Draws; std::uint32_t Frames; };
+
+	static std::uint64_t* Stamps = nullptr;
+	static Mark Marks[Sets][MaxMarks];
+	static std::int32_t Counts[Sets];
+	static std::uint32_t Frame = 0;
+	static std::uint32_t Draws = 0;
+	static Name Names[MaxNames]; static std::int32_t NameCount = 0;
+	static Acc Accs[MaxMarks]; static std::int32_t AccCount = 0;
+	static std::uint32_t GoodFrames = 0, PendingFrames = 0, InvalidFrames = 0;
+	static double FrameUs = 0.0, PeriodUs = 0.0, PeriodRaw = 0.0; static std::uint32_t PeriodCount = 0;
+	static std::uint64_t LastStart = 0;
+	struct Active { const void* Key; std::int32_t W, H; bool Screen; };
+	static Active Stack[16]; static std::int32_t Depth = 0;
+
+	static void BeginSet() {
+		if (Stamps == nullptr) {
+			Stamps = static_cast<std::uint64_t*>(memalign(256, sizeof(std::uint64_t) * Sets * MaxMarks));
+			std::memset(Stamps, 0, sizeof(std::uint64_t) * Sets * MaxMarks);
+			DCFlushRange(Stamps, sizeof(std::uint64_t) * Sets * MaxMarks);
+		}
+		const std::int32_t set = std::int32_t(Frame % Sets);
+		std::uint64_t* s = Stamps + set * MaxMarks;
+		std::memset(s, 0, sizeof(std::uint64_t) * MaxMarks);
+		DCFlushRange(s, sizeof(std::uint64_t) * MaxMarks);
+		Counts[set] = 0;
+		Draws = 0;
+	}
+
+	static void Sample(const char* label) {
+		if (Stamps == nullptr) BeginSet();
+		const std::int32_t set = std::int32_t(Frame % Sets);
+		std::int32_t& n = Counts[set];
+		if (n >= MaxMarks) return;
+		if (n > 0) Marks[set][n - 1].Draws = Draws;
+		Draws = 0;
+		// Same label twice in one frame (e.g. several players): number them so each keeps its own row
+		char text[LabelSize]; std::snprintf(text, sizeof(text), "%s", label);
+		std::int32_t dup = 1;
+		for (std::int32_t i = 0; i < n; i++) {
+			if (std::strncmp(Marks[set][i].Label, label, std::strlen(label)) == 0 &&
+				(Marks[set][i].Label[std::strlen(label)] == '\0' || Marks[set][i].Label[std::strlen(label)] == '#')) dup++;
+		}
+		if (dup > 1) std::snprintf(text, sizeof(text), "%s#%d", label, (int)dup);
+		std::memcpy(Marks[set][n].Label, text, LabelSize);
+		Marks[set][n].Draws = 0;
+		GX2SampleBottomGPUCycle(Stamps + set * MaxMarks + n);
+		n++;
+	}
+
+	static void Process(std::int32_t set) {
+		const std::int32_t n = Counts[set];
+		if (n < 2) return;
+		std::uint64_t* s = Stamps + set * MaxMarks;
+		DCInvalidateRange(s, sizeof(std::uint64_t) * MaxMarks);
+		for (std::int32_t i = 0; i < n; i++) {
+			if (s[i] == 0) { PendingFrames++; return; }
+			if (s[i] == ~std::uint64_t(0)) { InvalidFrames++; return; }
+		}
+		GoodFrames++;
+		for (std::int32_t i = 0; i + 1 < n; i++) {
+			const double us = double(OSTicksToMicroseconds(GX2GPUTimeToCPUTime(s[i + 1]) - GX2GPUTimeToCPUTime(s[i])));
+			std::int32_t j = 0;
+			while (j < AccCount && std::strcmp(Accs[j].Label, Marks[set][i].Label) != 0) j++;
+			if (j == AccCount) {
+				if (AccCount >= MaxMarks) continue;
+				std::memcpy(Accs[j].Label, Marks[set][i].Label, LabelSize); Accs[j].Us = 0.0; Accs[j].Draws = 0.0; Accs[j].Frames = 0; AccCount++;
+			}
+			Accs[j].Us += us; Accs[j].Draws += Marks[set][i].Draws; Accs[j].Frames++;
+		}
+		FrameUs += double(OSTicksToMicroseconds(GX2GPUTimeToCPUTime(s[n - 1]) - GX2GPUTimeToCPUTime(s[0])));
+		// Start-to-start period of consecutive frames, in raw GPU cycles and converted, to check the conversion
+		if (LastStart != 0 && s[0] > LastStart) {
+			PeriodRaw += double(s[0] - LastStart);
+			PeriodUs += double(OSTicksToMicroseconds(GX2GPUTimeToCPUTime(s[0]) - GX2GPUTimeToCPUTime(LastStart)));
+			PeriodCount++;
+		}
+		LastStart = s[0];
+	}
+
+	// Called once per frame after the flip wait; the frame Sets-1 back is long retired by then
+	static void EndFrame() {
+		Frame++;
+		if (Frame >= Sets) Process(std::int32_t((Frame - (Sets - 1)) % Sets));
+		BeginSet();
+		Depth = 0;
+		Sample("start");
+	}
+}
+
+void WiiUGpuName(const void* key, const char* name)
+{
+	for (std::int32_t i = 0; i < WiiUGpuProf::NameCount; i++) {
+		if (WiiUGpuProf::Names[i].Key == key) { std::snprintf(WiiUGpuProf::Names[i].Text, sizeof(WiiUGpuProf::Names[i].Text), "%s", name); return; }
+	}
+	if (WiiUGpuProf::NameCount < WiiUGpuProf::MaxNames) {
+		auto& e = WiiUGpuProf::Names[WiiUGpuProf::NameCount++];
+		e.Key = key; std::snprintf(e.Text, sizeof(e.Text), "%s", name);
+	}
+}
+
+// begin: a viewport starts drawing. Viewports nest (a viewport without a texture and the split passes are drawn
+// inside another one), so when one finishes, what follows is labelled as the rest of the one it was drawn in.
+namespace WiiUGpuProf
+{
+	static void Label(char* out, const Active& a, const char* suffix) {
+		const char* name = (a.Screen ? "screen" : "unnamed");
+		for (std::int32_t i = 0; i < NameCount; i++) {
+			if (Names[i].Key == a.Key) { name = Names[i].Text; break; }
+		}
+		std::snprintf(out, LabelSize, "%s %dx%d%s", name, (int)a.W, (int)a.H, suffix);
+	}
+}
+
+void WiiUGpuMark(const void* key, std::int32_t width, std::int32_t height, bool screen, bool begin)
+{
+	using namespace WiiUGpuProf;
+	char label[LabelSize];
+	if (begin) {
+		const Active a = { key, width, height, screen };
+		if (Depth < 16) Stack[Depth] = a;
+		Depth++;
+		Label(label, a, "");
+	} else {
+		if (Depth > 0) Depth--;
+		if (Depth > 0 && Depth <= 16) Label(label, Stack[Depth - 1], " cont");
+		else std::snprintf(label, sizeof(label), "between viewports");
+	}
+	Sample(label);
+}
+
+void WiiUGpuClearNames()
+{
+	WiiUGpuProf::NameCount = 0;
+}
+
+void WiiUGpuReset()
+{
+	WiiUGpuProf::AccCount = 0; WiiUGpuProf::GoodFrames = WiiUGpuProf::PendingFrames = WiiUGpuProf::InvalidFrames = 0;
+	WiiUGpuProf::FrameUs = WiiUGpuProf::PeriodUs = WiiUGpuProf::PeriodRaw = 0.0; WiiUGpuProf::PeriodCount = 0;
+}
+
+// Rows: "  gpu <ms per frame> <draws per frame> <label>", segments under 0.05 ms and with no draws left out
+std::size_t WiiUGpuFormat(char* out, std::size_t size)
+{
+	using namespace WiiUGpuProf;
+	std::size_t len = 0;
+	auto put = [&](const char* fmt, auto... args) {
+		if (len >= size) return;
+		int r = std::snprintf(out + len, size - len, fmt, args...);
+		if (r > 0) len = std::min(len + std::size_t(r), size - 1);
+	};
+	const double f = (GoodFrames > 0 ? double(GoodFrames) : 1.0);
+	put("  gpu frames %u good, %u pending, %u invalid | start-to-end %.2f ms | period %.2f ms = %.0f cycles\n",
+		(unsigned)GoodFrames, (unsigned)PendingFrames, (unsigned)InvalidFrames, FrameUs / f / 1000.0,
+		PeriodCount > 0 ? PeriodUs / PeriodCount / 1000.0 : 0.0, PeriodCount > 0 ? PeriodRaw / PeriodCount : 0.0);
+	for (std::int32_t i = 0; i < AccCount; i++) {
+		const double ms = Accs[i].Us / f / 1000.0, draws = Accs[i].Draws / f;
+		if (ms < 0.05 && draws < 0.5) continue;
+		put("  gpu %7.2f %6.1f %s\n", ms, draws, Accs[i].Label);
+	}
+	return len;
+}
+// end WIIU_TEST_HOOK
 
 namespace nCine::RHI::GX2
 {
@@ -114,6 +296,9 @@ namespace nCine::RHI::GX2
 	std::uint32_t Gx2Device::_uniformChunkTokens[Gx2Device::UniformRingChunkCount] = {};
 	std::uint32_t Gx2Device::_openBatch = 1;
 	OSTime Gx2Device::_batchStamps[Gx2Device::BatchStampCount] = {};
+	bool Gx2Device::_benchDrawsSinceFlush = false; // WIIU_TEST_HOOK (local only, do not commit)
+	std::uint32_t Gx2Device::_benchBatchesThisFrame = 0;
+	std::uint32_t Gx2Device::_benchSwapToken = 0;
 	const Gx2ShaderProgram* Gx2Device::_lastProgram = nullptr;
 
 	// ── Session ──────────────────────────────────────────────────────────────────────────────────
@@ -157,7 +342,7 @@ namespace nCine::RHI::GX2
 		surface.use = GX2_SURFACE_USE_TEXTURE_COLOR_BUFFER_TV;
 		surface.tileMode = GX2_TILE_MODE_DEFAULT;
 		GX2CalcSurfaceSizeAndAlignment(&surface);
-		_screenMemory = Gx2Memory::Alloc(surface.imageSize, surface.alignment);
+		AllocScreenMemory(); // WIIU_TEST_HOOK (local only, do not commit): MEM1 first in the MEM1 build
 		if (!_screenMemory.IsValid() && (_screenWidth > 1280 || _screenHeight > 720)) {
 			// The buffer shares MEM1 with SDL's scan buffers; a 1080p one that doesn't fit falls back to 720p, the
 			// drawable size follows it (see SdlGfxDevice::QueryDrawableSize())
@@ -199,6 +384,7 @@ namespace nCine::RHI::GX2
 		_initialized = true;
 		_inForeground = true;
 		_firstFrame = true;
+		_benchSwapToken = 0; // WIIU_TEST_HOOK (local only, do not commit)
 		InvalidateTarget();
 		_viewport = Recti(0, 0, _screenWidth, _screenHeight);
 		SetupInitialState();
@@ -236,6 +422,18 @@ namespace nCine::RHI::GX2
 		// SDL releases the foreground (and frees its scan buffers) on its next event pump, so the GPU has to
 		// be done with everything already queued before that happens
 		GX2DrawDone();
+#if defined(WIIU_TEST_MEM1) // WIIU_TEST_HOOK (local only, do not commit)
+		// SDL destroys its MEM1 heap with the foreground, so every block in it goes now; the render targets are
+		// allocated again when next drawn into (their contents are redrawn every frame) and the screen buffer in
+		// EnterForeground()
+		ReleaseRetiredBlocks(true);
+		Gx2Texture::DropMem1Blocks();
+		if (_screenMemory.Mem1Flags != 0) {
+			Gx2Memory::Free(_screenMemory);
+			_screenBuffer.surface.image = nullptr;
+		}
+		LOGI("MEM1: released everything, {} bytes left", Gx2Memory::GetMem1Bytes());
+#endif
 		_inForeground = false;
 		LOGI("GX2 device entering background");
 	}
@@ -249,6 +447,16 @@ namespace nCine::RHI::GX2
 		// survived, so only the context state has to be made current again
 		RestoreContextState();
 		_inForeground = true;
+		_benchSwapToken = 0; // WIIU_TEST_HOOK (local only, do not commit)
+#if defined(WIIU_TEST_MEM1) // WIIU_TEST_HOOK (local only, do not commit)
+		if (!_screenMemory.IsValid()) {
+			if (!AllocScreenMemory()) {
+				LOGE("Failed to allocate the screen colour buffer again");
+			}
+			_screenBuffer.surface.image = _screenMemory.Base;
+			GX2InitColorBufferRegs(&_screenBuffer);
+		}
+#endif
 		_firstFrame = true;
 		_targetDirty = true;
 		LOGI("GX2 device returning to foreground");
@@ -321,6 +529,7 @@ namespace nCine::RHI::GX2
 		}
 
 		// Out of slots: wait for the GPU, after which every retired block is safe to release
+		WiiUBenchRetireFinishes++; // WIIU_TEST_HOOK (local only, do not commit)
 		Finish();
 		ReleaseRetiredBlocks(true);
 		_retiredBlocks[0].Block = block;
@@ -604,6 +813,11 @@ namespace nCine::RHI::GX2
 		if (_currentRenderTarget == renderTarget) {
 			return;
 		}
+		// WIIU_TEST_HOOK (local only, do not commit): variant B3 submits what was drawn into the target being left,
+		// so the GPU starts on it while the CPU records the next one
+		if ((WiiUBenchFlags & WiiUBenchFlag::FlushOnTarget) != 0 && _benchDrawsSinceFlush) {
+			FlushBatch();
+		}
 		_currentRenderTarget = renderTarget;
 		_targetDirty = true;
 		// Bound right away rather than at the next draw, because a clear may come first
@@ -698,6 +912,8 @@ namespace nCine::RHI::GX2
 		// Submits the commands recorded so far; an empty command buffer is not submitted, and then the last
 		// submitted stamp still covers everything recorded before it
 		GX2Flush();
+		_benchDrawsSinceFlush = false; // WIIU_TEST_HOOK (local only, do not commit)
+		_benchBatchesThisFrame++;
 		_batchStamps[_openBatch % BatchStampCount] = GX2GetLastSubmittedTimeStamp();
 		_openBatch++;
 		if (_openBatch == 0) {
@@ -740,7 +956,10 @@ namespace nCine::RHI::GX2
 			return true;
 		}
 		// Sleeps on GX2's timestamp event; it gives up (and returns false) only on a GPU timeout
-		return (GX2WaitTimeStamp(stamp) != FALSE);
+		const TimeStamp waitStart = TimeStamp::Now(); // WIIU_TEST_HOOK (local only, do not commit)
+		const bool waited = (GX2WaitTimeStamp(stamp) != FALSE);
+		FrameStatistics::AddCounter("gpuWait", waitStart.GetMillisecondsSince(), FrameStatistics::Unit::Milliseconds);
+		return waited;
 	}
 
 	FenceHandle Gx2Device::InsertFence()
@@ -777,16 +996,48 @@ namespace nCine::RHI::GX2
 			return;
 		}
 
+		// WIIU_TEST_HOOK (local only, do not commit): variants B1 and B2 let the CPU record the next frame while the
+		// GPU draws this one. Only the scan copies have to wait: the scan buffers are double-buffered, so a copy
+		// recorded while the previous swap has not flipped yet would draw into the buffer still being shown.
+		const bool splitPresent = ((WiiUBenchFlags & WiiUBenchFlag::SplitPresent) != 0);
+		const bool waitBeforeCopy = (splitPresent || (WiiUBenchFlags & WiiUBenchFlag::WaitBeforeCopy) != 0);
+		if (splitPresent) {
+			// The GPU starts on the frame's draws while the CPU waits for the flip
+			FlushBatch();
+		}
+		if (waitBeforeCopy) {
+			const TimeStamp flipStart = TimeStamp::Now();
+			WaitForPreviousFlip();
+			FrameStatistics::AddCounter("flipWait", flipStart.GetMillisecondsSince(), FrameStatistics::Unit::Milliseconds);
+		}
+		bool copyDrc = true;
+		if ((WiiUBenchFlags & WiiUBenchFlag::DrcOnce) != 0) {
+			// Both GamePad scan buffers get a frame, then the swaps alternate between those two
+			copyDrc = (WiiUBenchFrame < 2);
+		} else if ((WiiUBenchFlags & WiiUBenchFlag::DrcEveryOther) != 0) {
+			// Two copies in a row, so each of the two scan buffers is refreshed every four frames
+			copyDrc = ((WiiUBenchFrame & 2) == 0);
+		}
+		WiiUBenchFrame++;
+
 		// The copy scales the screen buffer to each scan buffer's own resolution (the TV mode SDL picked, and
 		// 854x480 on the GamePad)
+		WiiUGpuProf::Sample("scanCopyTV"); // WIIU_TEST_HOOK (local only, do not commit)
 		GX2CopyColorBufferToScanBuffer(&_screenBuffer, GX2_SCAN_TARGET_TV);
-		GX2CopyColorBufferToScanBuffer(&_screenBuffer, GX2_SCAN_TARGET_DRC);
+		WiiUGpuProf::Sample("scanCopyDRC"); // WIIU_TEST_HOOK (local only, do not commit)
+		if (copyDrc) {
+			GX2CopyColorBufferToScanBuffer(&_screenBuffer, GX2_SCAN_TARGET_DRC);
+		}
+		WiiUGpuProf::Sample("end"); // WIIU_TEST_HOOK (local only, do not commit)
 		// The copies clobber the pipeline state like a clear does
 		RestoreContextState();
 		GX2SwapScanBuffers();
 		// Submits the frame without waiting for it: what the next frame writes is kept off memory this one still
 		// reads by the tokens (see the class documentation)
+		_benchSwapToken = _openBatch; // WIIU_TEST_HOOK (local only, do not commit)
 		FlushBatch();
+		FrameStatistics::AddCounter("batches", float(_benchBatchesThisFrame), FrameStatistics::Unit::Number); // WIIU_TEST_HOOK
+		_benchBatchesThisFrame = 0;
 
 		if (_firstFrame) {
 			// The scan-out is turned on only once there is a frame of ours in the scan buffers
@@ -795,13 +1046,55 @@ namespace nCine::RHI::GX2
 			_firstFrame = false;
 		}
 
-		// Keeps the CPU at most one frame ahead of the scan-out. TODO (milestone 6): measure on hardware
-		// whether waiting for the swap before the previous one (GX2GetSwapStatus) is worth the extra latency
-		GX2WaitForFlip();
+		if (!waitBeforeCopy) {
+			// Keeps the CPU at most one frame ahead of the scan-out. TODO (milestone 6): measure on hardware
+			// whether waiting for the swap before the previous one (GX2GetSwapStatus) is worth the extra latency
+			const TimeStamp flipStart = TimeStamp::Now(); // WIIU_TEST_HOOK (local only, do not commit)
+			GX2WaitForFlip();
+			FrameStatistics::AddCounter("flipWait", flipStart.GetMillisecondsSince(), FrameStatistics::Unit::Milliseconds);
+		}
 
 		_frameCounter++;
+		WiiUGpuProf::EndFrame(); // WIIU_TEST_HOOK (local only, do not commit)
 		ReleaseRetiredBlocks();
 		InvalidateTarget();
+	}
+
+	// WIIU_TEST_HOOK (local only, do not commit): waits until the swap queued by the previous present has flipped.
+	// GX2 counts a swap only once the GPU has executed it, so the batch that carries it is waited for first; after
+	// that GX2WaitForFlip() returns at the next flip, or at once when none is pending. The loop is bounded so a
+	// count that never catches up (the scan-out still off on the first frame, a trip to the HOME menu) cannot hang.
+	// WIIU_TEST_HOOK (local only, do not commit): the screen buffer's memory, from MEM1 in the MEM1 build when it fits
+	bool Gx2Device::AllocScreenMemory()
+	{
+		const GX2Surface& surface = _screenBuffer.surface;
+#if defined(WIIU_TEST_MEM1)
+		_screenMemory = Gx2Memory::AllocSurfaceMem1(surface);
+		if (_screenMemory.IsValid()) {
+			return true;
+		}
+#endif
+		_screenMemory = Gx2Memory::Alloc(surface.imageSize, surface.alignment);
+		return _screenMemory.IsValid();
+	}
+
+	void Gx2Device::WaitForPreviousFlip()
+	{
+		if (_benchSwapToken != 0) {
+			const OSTime stamp = GetBatchStamp(_benchSwapToken);
+			if (GX2GetRetiredTimeStamp() < stamp) {
+				GX2WaitTimeStamp(stamp);
+			}
+		}
+		for (std::int32_t i = 0; i < 4; i++) {
+			std::uint32_t swapCount = 0, flipCount = 0;
+			OSTime lastFlip = 0, lastVsync = 0;
+			GX2GetSwapStatus(&swapCount, &flipCount, &lastFlip, &lastVsync);
+			if (std::int32_t(swapCount - flipCount) <= 0) {
+				break;
+			}
+			GX2WaitForFlip();
+		}
 	}
 
 	// ── Draws ────────────────────────────────────────────────────────────────────────────────────
@@ -821,6 +1114,7 @@ namespace nCine::RHI::GX2
 			if (!IsUseRetired(token)) {
 				// The ring has come round to a chunk the GPU may still be reading: the CPU is far ahead, or one
 				// frame needs more than the whole ring. Not an error, but worth knowing when it happens often.
+				WiiUBenchRingWaits++; // WIIU_TEST_HOOK (local only, do not commit)
 				static std::uint32_t waits = 0;
 				if ((waits++ % 600) == 0) {
 					LOGW("The uniform ring caught up with the GPU, waiting ({} times so far)", waits);
@@ -946,6 +1240,8 @@ namespace nCine::RHI::GX2
 
 		const GX2PrimitiveMode mode = TranslatePrimitive(primitive);
 		const std::uint32_t instances = std::uint32_t(numInstances > 0 ? numInstances : 1);
+		WiiUGpuProf::Draws++; // WIIU_TEST_HOOK (local only, do not commit)
+		_benchDrawsSinceFlush = true;
 		if (indexed) {
 			const Gx2BufferObject* ibo = program->GetVertexFormat().GetIbo();
 			if (ibo == nullptr || ibo->GetGpuData() == nullptr) {

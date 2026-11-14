@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+struct GX2Surface; // WIIU_TEST_HOOK (local only, do not commit)
+
 namespace nCine::RHI::GX2
 {
 	/**
@@ -29,6 +31,8 @@ namespace nCine::RHI::GX2
 		{
 			void* Base = nullptr;
 			std::uint32_t Size = 0;
+			/** @brief WIIU_TEST_HOOK (local only, do not commit): GX2R flags of a MEM1 surface, 0 for MEM2 */
+			std::uint32_t Mem1Flags = 0;
 
 			inline bool IsValid() const {
 				return (Base != nullptr);
@@ -44,6 +48,16 @@ namespace nCine::RHI::GX2
 			                  and surfaces whatever `GX2CalcSurfaceSizeAndAlignment()` reports
 		*/
 		Block Alloc(std::uint32_t size, std::uint32_t alignment);
+#if defined(WIIU_TEST_MEM1)
+		/**
+			@brief WIIU_TEST_HOOK (local only, do not commit): image memory for a colour surface from wiiu-sdl2's MEM1
+			heap, through GX2R (`BIND_COLOR_BUFFER`); an invalid block if it does not fit. Only while in the
+			foreground: SDL destroys that heap in the background, so every such block has to be freed before.
+		*/
+		Block AllocSurfaceMem1(const GX2Surface& surface);
+		/** @brief Bytes currently allocated through @ref AllocSurfaceMem1() */
+		std::uint32_t GetMem1Bytes();
+#endif
 		/** @brief Releases a block and resets it; the caller must know the GPU is done with it */
 		void Free(Block& block);
 

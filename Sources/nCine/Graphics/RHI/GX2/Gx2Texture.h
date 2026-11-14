@@ -58,6 +58,10 @@ namespace nCine::RHI::GX2
 		const GX2Surface* GetSurface() const;
 		/** @brief Releases the GPU copy (on re-allocation and destruction) */
 		void ReleaseGpu() const;
+#if defined(WIIU_TEST_MEM1)
+		/** @brief WIIU_TEST_HOOK (local only, do not commit): frees every MEM1 block at once (the GPU must be idle) */
+		static void DropMem1Blocks();
+#endif
 		/** @brief Binds this texture and its sampler state to a pixel shader texture unit */
 		void ApplySamplerState(std::uint32_t textureUnit) const;
 		/** @brief Records that a draw of the batch with @p token samples the GPU copy (see @ref Gx2Device::GetUseToken()) */
@@ -231,6 +235,9 @@ namespace nCine::RHI::GX2
 		mutable bool _samplerDirty;
 		// Token of the last batch with a draw that samples the GPU copy, 0 if none
 		mutable std::uint32_t _lastUse;
+		// WIIU_TEST_HOOK (local only, do not commit): a render target the MEM1 build puts in MEM1 (WiiUBenchMem1Hint
+		// was set when it was allocated)
+		bool _preferMem1 = false;
 
 		void Allocate(PixelFormat format, std::int32_t width, std::int32_t height);
 		/** @brief (Re)creates the GPU copy and its control structure when missing, then refreshes it if stale */

@@ -4,6 +4,7 @@
 #include "Gx2Device.h"
 
 #include "../../../../Main.h"
+#include "../../../../WiiUBench.h" // WIIU_TEST_HOOK (local only, do not commit)
 
 #include <cstring>
 
@@ -98,8 +99,42 @@ namespace nCine::RHI::GX2
 		ReleaseGpu();
 	}
 
+#if defined(WIIU_TEST_MEM1) // WIIU_TEST_HOOK (local only, do not commit)
+	namespace
+	{
+		const Gx2Texture* Mem1Textures[64];
+		std::uint32_t Mem1TextureCount = 0;
+
+		void ForgetMem1Texture(const Gx2Texture* texture)
+		{
+			for (std::uint32_t i = 0; i < Mem1TextureCount; i++) {
+				if (Mem1Textures[i] == texture) {
+					Mem1Textures[i] = Mem1Textures[--Mem1TextureCount];
+					return;
+				}
+			}
+		}
+	}
+
+	void Gx2Texture::DropMem1Blocks()
+	{
+		for (std::uint32_t i = 0; i < Mem1TextureCount; i++) {
+			const Gx2Texture* texture = Mem1Textures[i];
+			Gx2Memory::Free(texture->_gpuBlock);
+			texture->_gpuValid = false;
+			texture->_lastUse = 0;
+		}
+		Mem1TextureCount = 0;
+	}
+#endif
+
 	void Gx2Texture::ReleaseGpu() const
 	{
+#if defined(WIIU_TEST_MEM1) // WIIU_TEST_HOOK (local only, do not commit)
+		if (_gpuBlock.Mem1Flags != 0) {
+			ForgetMem1Texture(this);
+		}
+#endif
 		if (_gpuBlock.IsValid()) {
 			// The GPU may still be reading these texels from a frame that has not finished, so the block is
 			// handed to the device's retirement list rather than freed under the hardware
@@ -136,6 +171,7 @@ namespace nCine::RHI::GX2
 		// Keep a self-consistent 4-byte-per-texel store for the runtime formats: promote the narrower ones
 		// (RGB8 render targets and the palette-index formats R8 / RG8) to an RGBA8 store, remembering the
 		// original in _uploadFormat. One GPU-side format means one texture layout to get right.
+		_preferMem1 = WiiUBenchMem1Hint; // WIIU_TEST_HOOK (local only, do not commit)
 		_uploadFormat = format;
 		_format = (format == PixelFormat::RGB8 || format == PixelFormat::R8 || format == PixelFormat::RG8) ? PixelFormat::RGBA8 : format;
 		_width = width;
@@ -189,7 +225,21 @@ namespace nCine::RHI::GX2
 			GX2CalcSurfaceSizeAndAlignment(&surface);
 
 			if (_gpuBlock.Size < surface.imageSize) {
+#if defined(WIIU_TEST_MEM1) // WIIU_TEST_HOOK (local only, do not commit)
+				if (_gpuBlock.Mem1Flags != 0) {
+					ForgetMem1Texture(this);
+				}
+#endif
 				Gx2Device::RetireBlock(_gpuBlock);
+#if defined(WIIU_TEST_MEM1) // WIIU_TEST_HOOK (local only, do not commit)
+				if (_isRenderTarget && _preferMem1 && Gx2Device::CanAllocMem1() && Mem1TextureCount < 64) {
+					_gpuBlock = Gx2Memory::AllocSurfaceMem1(surface);
+					if (_gpuBlock.IsValid()) {
+						Mem1Textures[Mem1TextureCount++] = this;
+					}
+				}
+				if (!_gpuBlock.IsValid())
+#endif
 				_gpuBlock = Gx2Memory::Alloc(surface.imageSize, surface.alignment);
 				if (!_gpuBlock.IsValid()) {
 					LOGE("Failed to allocate {} bytes for a {}x{} texture", surface.imageSize, _width, _height);

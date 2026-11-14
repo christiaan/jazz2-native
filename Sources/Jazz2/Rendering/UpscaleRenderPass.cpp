@@ -10,6 +10,18 @@
 #include <algorithm>
 #include <cmath>
 
+#if defined(WITH_RHI_GX2) // WIIU_TEST_HOOK (local only, do not commit)
+void WiiUGpuName(const void* key, const char* name);
+#	define WIIU_GPU_NAME(v, n) do { if ((v) != nullptr) ::WiiUGpuName((v), (n)); } while (false)
+#	include "../../WiiUBench.h"
+#	define WIIU_BENCH_FLAG(f) ((::WiiUBenchFlags & WiiUBenchFlag::f) != 0)
+#	define WIIU_MEM1_HINT(on) do { ::WiiUBenchMem1Hint = (on); } while (false)
+#else
+#	define WIIU_GPU_NAME(v, n) do { } while (false)
+#	define WIIU_BENCH_FLAG(f) false
+#	define WIIU_MEM1_HINT(on) do { } while (false)
+#endif
+
 #if !defined(RHI_CAP_POSTPROCESSING)
 // The direct tier (no shaders or no framebuffers - the software backend today, fixed-function console
 // backends later) renders straight into the backend screen framebuffer, whose size the pass drives via
@@ -143,7 +155,10 @@ namespace Jazz2::Rendering
 			// Already at the size it's shown at, there is nothing to resolve
 			useAntialiasing = false;
 		}
-		if (!overlay && (_supersample > 1 || useAntialiasing)) {
+		// WIIU_TEST_HOOK (local only, do not commit): variants C and D skip the subpass when only supersampling asks
+		// for it; the screen pass then scales the supersampled texture to the window by itself (see below)
+		const bool wiiuDirectResolve = (!overlay && _supersample > 1 && !useAntialiasing && WIIU_BENCH_FLAG(DirectResolve));
+		if (!overlay && (_supersample > 1 || useAntialiasing) && !wiiuDirectResolve) {
 			float widthRatio, heightRatio;
 			float widthFrac = modff((float)targetWidth / textureWidth, &widthRatio);
 			float heightFrac = modff((float)targetHeight / textureHeight, &heightRatio);
@@ -178,18 +193,24 @@ namespace Jazz2::Rendering
 			_node = std::make_unique<SceneNode>();
 			_node->SetVisitOrderState(SceneNode::VisitOrderState::Disabled);
 
+			WIIU_MEM1_HINT(!overlay); // WIIU_TEST_HOOK (local only, do not commit)
 			_target = std::make_unique<Texture>(nullptr, targetFormat, textureWidth, textureHeight);
+			WIIU_MEM1_HINT(false);
 			_view = std::make_unique<Viewport>(_target.get(), Viewport::DepthStencilFormat::None);
 			_view->SetRootNode(_node.get());
 			_view->SetCamera(&_camera);
 			_view->SetClearMode(Viewport::ClearMode::Never);
 		} else {
 			_view->RemoveAllTextures();
+			WIIU_MEM1_HINT(!overlay); // WIIU_TEST_HOOK (local only, do not commit)
 			_target->Init(nullptr, targetFormat, textureWidth, textureHeight);
+			WIIU_MEM1_HINT(false);
 			_view->SetTexture(_target.get());
 		}
-		_target->SetMinFiltering(SamplerFilter::Nearest);
-		_target->SetMagFiltering(SamplerFilter::Nearest);
+		// WIIU_TEST_HOOK (local only, do not commit): variant D scales the supersampled texture with a linear filter
+		const bool wiiuLinearResolve = (wiiuDirectResolve && WIIU_BENCH_FLAG(LinearResolve));
+		_target->SetMinFiltering(wiiuLinearResolve ? SamplerFilter::Linear : SamplerFilter::Nearest);
+		_target->SetMagFiltering(wiiuLinearResolve ? SamplerFilter::Linear : SamplerFilter::Nearest);
 		_target->SetWrap(SamplerWrapping::ClampToEdge);
 
 		// The overlay layer is only partially covered by the HUD, so unlike the scene (which is fully repainted every
@@ -255,6 +276,12 @@ namespace Jazz2::Rendering
 				default: _resizeShader = nullptr; break;
 			}
 		}
+		if (wiiuDirectResolve && !wiiuLinearResolve && _resizeShader == nullptr) {
+			// WIIU_TEST_HOOK (local only, do not commit): variant C, the bicubic shader of the antialiasing subpass
+			// draws the supersampled texture straight to the window (its input size is the texture's, see OnDraw())
+			_resizeShader = ContentResolver::Get().GetShader(PrecompiledShader::Antialiasing);
+			_resizeAtLogicalScale = false;
+		}
 
 		bool shaderChanged = (_resizeShader != nullptr
 			? _renderCommand.GetMaterial().SetShader(_resizeShader)
@@ -290,6 +317,7 @@ namespace Jazz2::Rendering
 
 	void UpscaleRenderPass::Register()
 	{
+		WIIU_GPU_NAME(_view.get(), "compose"); // WIIU_TEST_HOOK (local only, do not commit)
 		_antialiasing.Register();
 
 		Viewport::GetChain().push_back(_view.get());
@@ -339,6 +367,7 @@ namespace Jazz2::Rendering
 
 	void UpscaleRenderPass::AntialiasingSubpass::Register()
 	{
+		WIIU_GPU_NAME(_view.get(), "antialias"); // WIIU_TEST_HOOK (local only, do not commit)
 		if (_view != nullptr) {
 			Viewport::GetChain().push_back(_view.get());
 		}
@@ -430,6 +459,9 @@ namespace Jazz2::Rendering
 
 	void UpscaleRenderPassWithClipping::Register()
 	{
+		WIIU_GPU_NAME(_view.get(), "compose"); // WIIU_TEST_HOOK (local only, do not commit)
+		WIIU_GPU_NAME(_clippedView.get(), "clipped");
+		WIIU_GPU_NAME(_overlayView.get(), "overlay");
 		_antialiasing.Register();
 
 		auto& chain = Viewport::GetChain();

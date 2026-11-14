@@ -192,6 +192,10 @@ namespace nCine::RHI::GX2
 
 		/** @brief Monotonic count of presented frames */
 		static std::uint32_t GetFrameCounter();
+		/** @brief WIIU_TEST_HOOK (local only, do not commit): MEM1 can be allocated only in the foreground */
+		static inline bool CanAllocMem1() {
+			return CanSubmit();
+		}
 
 		/**
 			@brief Largest batch a batched sprite shader can address
@@ -259,7 +263,9 @@ namespace nCine::RHI::GX2
 		/** @brief Blocks retired by a destroyed resource, released once the GPU is past the frame that used them */
 		static constexpr std::uint32_t RetiredBlockCount = 64;
 		/** @brief Number of submitted batches whose GX2 timestamps are remembered */
-		static constexpr std::uint32_t BatchStampCount = 16;
+		// WIIU_TEST_HOOK (local only, do not commit): 256 instead of 16, variant B3 submits a batch at every target
+		// switch (about 40 a frame with four players), and a token older than this would wait for a later batch
+		static constexpr std::uint32_t BatchStampCount = 256;
 
 		struct UniformRange
 		{
@@ -327,6 +333,12 @@ namespace nCine::RHI::GX2
 		static std::uint32_t _openBatch;
 		/** @brief GX2 timestamp of each submitted batch, indexed by token modulo @ref BatchStampCount */
 		static OSTime _batchStamps[BatchStampCount];
+		// WIIU_TEST_HOOK (local only, do not commit): benchmark variants (see WiiUBench.h)
+		static bool _benchDrawsSinceFlush;
+		static std::uint32_t _benchBatchesThisFrame;
+		static std::uint32_t _benchSwapToken;
+		static void WaitForPreviousFlip();
+		static bool AllocScreenMemory();
 		/** @brief Program whose shaders are currently set on the GPU */
 		static const Gx2ShaderProgram* _lastProgram;
 

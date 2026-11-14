@@ -12,6 +12,10 @@
 #include "../tracy.h"
 #include "../../Main.h"
 
+#if defined(WITH_RHI_GX2) // WIIU_TEST_HOOK (local only, do not commit)
+void WiiUGpuMark(const void* key, std::int32_t width, std::int32_t height, bool screen, bool begin);
+#endif
+
 #if defined(WITH_QT5)
 #	include "Qt5GfxDevice.h"
 #endif
@@ -412,9 +416,23 @@ namespace nCine
 		DrawContents(nextViewport, nextIndex);
 	}
 
+#if defined(WITH_RHI_GX2) // WIIU_TEST_HOOK (local only, do not commit)
+	struct WiiUGpuScope {
+		const Viewport* V;
+		WiiUGpuScope(const Viewport* v) : V(v) { Mark(true); }
+		~WiiUGpuScope() { Mark(false); }
+		void Mark(bool begin) {
+			WiiUGpuMark(V, V->GetWidth(), V->GetHeight(), V->GetType() == Viewport::Type::Screen, begin);
+		}
+	};
+#endif
+
 	void Viewport::DrawContents(Viewport* nextViewport, std::uint32_t nextIndex)
 	{
 		ZoneScopedC(0x81A861);
+#if defined(WITH_RHI_GX2) // WIIU_TEST_HOOK (local only, do not commit)
+		WiiUGpuScope wiiuGpuScope(this);
+#endif
 #if defined(DEATH_DEBUG)
 		// TODO: RHI::Debug
 		/*char debugString[128];

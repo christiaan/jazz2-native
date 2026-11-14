@@ -9,6 +9,9 @@
 #include "../nCine/Base/FrameStatistics.h"
 #include "../nCine/Base/FrameTimer.h"
 #include "../nCine/Base/Random.h"
+#if defined(DEATH_TARGET_WIIU)
+#	include "../WiiUBench.h" // WIIU_TEST_HOOK (local only, do not commit)
+#endif
 #include "../nCine/Graphics/RHI/RhiFwd.h"	// RHI_LOW_POWER_GPU (a header macro, not a build define)
 
 #include <algorithm>
@@ -1849,6 +1852,23 @@ namespace
 	{
 		// `FirstRun` is true only if config file doesn't exist yet
 		FirstRun = false;
+
+#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit): keep the benchmark's per-test values
+		// (rescale mode, Zoom out, lighting resolution) out of the config file; the owner's own values are written instead
+		struct BenchPrefsSwap {
+			RescaleMode Rescale; bool ZoomOut; std::uint8_t Lighting; bool Active;
+			BenchPrefsSwap() : Rescale(ActiveRescaleMode), ZoomOut(PreferZoomOut), Lighting(LightingResolutionPercent), Active(WiiUBenchPrefsOverridden) {
+				if (Active) {
+					ActiveRescaleMode = (RescaleMode)WiiUBenchSavedRescale;
+					PreferZoomOut = WiiUBenchSavedZoomOut;
+					LightingResolutionPercent = WiiUBenchSavedLighting;
+				}
+			}
+			~BenchPrefsSwap() {
+				if (Active) { ActiveRescaleMode = Rescale; PreferZoomOut = ZoomOut; LightingResolutionPercent = Lighting; }
+			}
+		} benchPrefsSwap;
+#endif
 
 #if !defined(DEATH_TARGET_DREAMCAST) && !defined(DEATH_TARGET_N64)
 		// A memory card's (or the EEPROM's) mount point always exists and has no subdirectories to create
