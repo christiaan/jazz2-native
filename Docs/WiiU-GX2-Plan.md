@@ -823,12 +823,28 @@ Next, by expected gain:
    players (it could fall back to the linear resolve, or be documented as expensive).
    **Open bug (2026-11-14): startup freeze while archiving a large previous log.** Starting the installed
    `jazz2-gx2` for step 1 froze on the boot screen. `Jazz2.log` on the card was still the 1.1 MB log of the last
-   variants run (earlier launches archived logs of up to about 180 KB) and a new, empty `Jazz2.log.gz.tmp` was
+   variants run (earlier launches archived logs of up to 524 KB, in about 0.33 s) and a new, empty `Jazz2.log.gz.tmp` was
    left behind, so it stopped inside `ArchivePreviousLogFile()` (`Sources/nCine/Application.cpp`), in the
    `WriteLogArchivePart()` of the staging file. Whether it crashed or only hung is not known (the file is
    buffered, so empty does not mean nothing ran). The card's state (`Jazz2.log`, `Jazz2.log.gz`, the empty
    `.tmp`, `Jazz2.config`) is saved in `~/jazz2-wiiu-test/console-bench/final/crash-startup/` for a Cemu
    repro. Workaround until fixed: delete `Jazz2.log` from the card after copying it off, before the next launch.
+   **Not reproducible in Cemu (2026-11-14).** `wiiu-port` HEAD booted to the menu with the exact card state, with
+   log + `.gz`, and with the log alone; each archive passed `gzip -t` (the log-only one unpacks byte-identical) and
+   the `.tmp` was removed. Script: `~/jazz2-wiiu-test/scripts/repro-logarchive.sh` (`STATE="log gz tmp"`,
+   `NOREPACK=1`; `testrun.sh` deletes `Jazz2.log` first, so it can't be used for this). Ruled out: plain slowness
+   (524 KB took ≤ 0.33 s on the console), a size-dependent loop in `DeflateWriter`/`FileStream`/the archive walk
+   (zlib 1.3.1; `FileStream` retries only on `EINTR`, which wut's FSA layer never returns; wut's seek calls
+   `FSASetPosFile`), a hidden `tw` trap (none of the 652 patched ones is on the archive path), a corrupt log (clean
+   text with a normal shutdown), and the leftover `.tmp` (the launch after `Jazz2.log` was deleted ran fine with it
+   there). The freeze lies between creating the `.tmp` and closing it. This log was the first to cross two
+   thresholds: staging output over 64 KiB (~105 KB, previous maximum 52 KB; likely a second cluster before the
+   seek back to offset 16) and input over 1 MiB (1124616 bytes). Console test logs to separate them, in
+   `crash-startup/bisect/` (copy one to `sd:/wiiu/apps/Jazz2/Jazz2.log` with the existing `.gz` beside it, launch):
+   `A-700k.log` (input < 1 MiB, output ~66 KB: output threshold only), `B-1.1M-compressible.log` (input > 1 MiB,
+   output ~54 KB: input threshold only), `C-600k.log` (~57 KB, control). Also relaunch once with the original
+   `crash-startup/Jazz2.log` to see whether it freezes every time. Aroma's logging module capturing `OSReport`
+   would show where it stops.
 
 ## Backend contract (what to write)
 
