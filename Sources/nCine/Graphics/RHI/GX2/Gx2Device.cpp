@@ -158,6 +158,17 @@ namespace nCine::RHI::GX2
 		surface.tileMode = GX2_TILE_MODE_DEFAULT;
 		GX2CalcSurfaceSizeAndAlignment(&surface);
 		_screenMemory = Gx2Memory::Alloc(surface.imageSize, surface.alignment);
+		if (!_screenMemory.IsValid() && (_screenWidth > 1280 || _screenHeight > 720)) {
+			// The buffer shares MEM1 with SDL's scan buffers; a 1080p one that doesn't fit falls back to 720p, the
+			// drawable size follows it (see SdlGfxDevice::QueryDrawableSize())
+			LOGW("Failed to allocate the {}x{} screen colour buffer ({} bytes), falling back to 1280x720", _screenWidth, _screenHeight, surface.imageSize);
+			_screenWidth = 1280;
+			_screenHeight = 720;
+			surface.width = std::uint32_t(_screenWidth);
+			surface.height = std::uint32_t(_screenHeight);
+			GX2CalcSurfaceSizeAndAlignment(&surface);
+			_screenMemory = Gx2Memory::Alloc(surface.imageSize, surface.alignment);
+		}
 		if (!_screenMemory.IsValid()) {
 			LOGE("Failed to allocate the {}x{} screen colour buffer ({} bytes)", _screenWidth, _screenHeight, surface.imageSize);
 			std::free(_contextState);

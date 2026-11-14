@@ -101,6 +101,13 @@ namespace Jazz2
 		Ultra						/**< Reserved, behaves as @ref High for now */
 	};
 
+	/** @brief Size of the screen buffer of the Wii U's GX2 backend, see @ref PreferencesCache::PreferredScreenResolution */
+	enum class ScreenResolution : std::uint8_t {
+		Auto,						/**< Follows the console's TV output setting (default) */
+		Hd720,						/**< 1280x720 */
+		Hd1080						/**< 1920x1080 */
+	};
+
 	/** @brief What is drawn in the colors of the 16-bit renderer of JJ2+, see @ref PreferencesCache::Dithering */
 	enum class DitheringScope : std::uint8_t {
 		None,						/**< Nothing, everything is drawn in full colors */
@@ -395,6 +402,13 @@ namespace Jazz2
 		 * HUD, the in-game console and the menu all narrow themselves with.
 		 */
 		static std::uint16_t SafeArea[(std::size_t)SafeAreaEdge::Count];
+		/**
+		 * @brief Size of the screen buffer the frame is drawn into
+		 *
+		 * Used only by the Wii U's GX2 backend, which creates the buffer once at startup, so a change applies at
+		 * the next start. Stored on every platform to keep the file format the same.
+		 */
+		static ScreenResolution PreferredScreenResolution;
 
 		// Gameplay
 		/** @brief Whether reforged gameplay is enabled */
@@ -545,6 +559,15 @@ namespace Jazz2
 		 * sizes that surface, and the logical view then follows the drawable size as on any other display.
 		 */
 		static void ApplyRenderingResolution();
+#if defined(WITH_RHI_GX2)
+		/**
+		 * @brief Returns the screen buffer size for @p mode
+		 *
+		 * @ref ScreenResolution::Auto picks 1920x1080 when the console outputs 1080i or 1080p to the TV, and
+		 * 1280x720 otherwise.
+		 */
+		static Vector2i GetScreenResolutionSize(ScreenResolution mode);
+#endif
 		/** @brief Collects the frame statistics exactly while @ref PerformanceMetrics is at the level that shows them */
 		static void ApplyPerformanceMetrics();
 
@@ -640,7 +663,7 @@ namespace Jazz2
 		// Where DitheringScope is in BoolOptions, Dithering0 is its lower bit
 		static constexpr std::uint32_t DitheringShift = 36;
 
-		static constexpr std::uint8_t FileVersion = 19;
+		static constexpr std::uint8_t FileVersion = 20;
 
 		PreferencesCache(const PreferencesCache&) = delete;
 		PreferencesCache& operator=(const PreferencesCache&) = delete;

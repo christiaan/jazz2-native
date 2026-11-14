@@ -50,6 +50,36 @@ namespace Jazz2::UI::Menu
 		list->Add<ListItem>(_("Rescale Mode"), [root]() { root->SwitchToSection<RescaleModeSection>(); });
 #endif
 
+#if defined(WITH_RHI_GX2)
+		// The Wii U's GX2 backend creates its screen buffer once at startup (see Main.cpp), so the preferred
+		// size applies at the next start; until then the row says so next to the size it will get
+		// TRANSLATORS: Menu item in Options > Graphics section
+		list->Add<ChoiceItem>(_("Screen Resolution"),
+			[this]() -> StringView {
+				Vector2i preferred = PreferencesCache::GetScreenResolutionSize(PreferencesCache::PreferredScreenResolution);
+				String size = format("{}x{}", preferred.X, preferred.Y);
+				if (PreferencesCache::PreferredScreenResolution == ScreenResolution::Auto) {
+					// TRANSLATORS: Option in Options > Graphics > Screen Resolution, followed by the size it picks
+					size = _f("Auto ({})", size);
+				}
+				if (preferred != theApplication().GetGfxDevice().GetDrawableResolution()) {
+					// TRANSLATORS: Shown in Options > Graphics > Screen Resolution when the new size needs a restart
+					size = _f("{} after restart", size);
+				}
+				_resolutionValue = std::move(size);
+				return _resolutionValue;
+			},
+			[this](std::int32_t direction) {
+				std::int32_t mode = (std::int32_t)PreferencesCache::PreferredScreenResolution + direction;
+				if (mode < (std::int32_t)ScreenResolution::Auto) {
+					mode = (std::int32_t)ScreenResolution::Auto;
+				} else if (mode > (std::int32_t)ScreenResolution::Hd1080) {
+					mode = (std::int32_t)ScreenResolution::Hd1080;
+				}
+				PreferencesCache::PreferredScreenResolution = (ScreenResolution)mode;
+				_isDirty = true;
+			});
+#else
 		// Display-only row (no OnChange): shows the current drawable resolution without arrows
 		// TRANSLATORS: Menu item in Options > Graphics section
 		list->Add<ChoiceItem>(_("Screen Resolution"),
@@ -59,6 +89,7 @@ namespace Jazz2::UI::Menu
 				return _resolutionValue;
 			},
 			nullptr);
+#endif
 
 #if defined(RHI_CAP_POSTPROCESSING)
 		// The most the scene is rendered at - the logical view is bounded by the default size scaled by this
