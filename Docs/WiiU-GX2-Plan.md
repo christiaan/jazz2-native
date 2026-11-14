@@ -764,7 +764,8 @@ after the Cemu comparison). A follow-up run covers both and measures MEM1 + D fo
 lighting to 100% first).
 
 The benchmark hook (runner, GPU timers, variant switches, MEM1 build) is committed on its own branch,
-`wiiu-bench` (commit `f7610e13`, on top of `54e0d273`), not on `wiiu-port`. Every hook there is marked
+`wiiu-bench` (commit `f7610e13`, on top of `54e0d273`), not on `wiiu-port`; `wiiu-bench2` is the same hook rebased
+onto the backend with MEM1, B1 and D built in (see step 4 below). Every hook there is marked
 `WIIU_TEST_HOOK`. Use it to copy from (the MEM1 allocation and HOME release in `Gx2Memory`/`Gx2Texture`/`Gx2Device`)
 and to re-measure: rebase it onto the backend work, or cherry-pick it onto a scratch branch. Since that commit
 `PreferencesCache::Save()` writes the owner's own rescale mode, Zoom out and lighting values while a benchmark
@@ -800,6 +801,11 @@ Next, by expected gain:
    of 60.
 4. One short console run with the current backend (MEM1 + B1 + D, lighting at 100%): frame rate with 3 and 4
    players with Zoom out and 4 without, a HOME round trip in a level, and a look at the TV picture with Zoom out.
+   Package ready (2026-11-14): `~/jazz2-wiiu-test/console-bench/final/` (`Jazz2Bench_final.wuhb`, a 9-test
+   `bench-tests-mem2.txt` and a `README.txt` with the steps). It is `41037c8a` plus the benchmark hook rebased onto
+   it, branch `wiiu-bench2` (`426d17ae`): runner, GPU timers and counters only, since MEM1, B1 and D are now the
+   backend's own; of the variant letters only E and F still do anything. In Cemu (2 s + 3 s per test) all nine ran
+   with `batches=2.00` per frame (the split present), no ring waits and no `Finish()` fallbacks.
 
 ## Backend contract (what to write)
 
