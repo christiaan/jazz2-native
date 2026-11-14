@@ -806,6 +806,15 @@ Next, by expected gain:
    it, branch `wiiu-bench2` (`426d17ae`): runner, GPU timers and counters only, since MEM1, B1 and D are now the
    backend's own; of the variant letters only E and F still do anything. In Cemu (2 s + 3 s per test) all nine ran
    with `batches=2.00` per frame (the split present), no ring waits and no `Finish()` fallbacks.
+   The tests that need watching now run first (castle1, 4 players, Zoom out: A, F, then Antialiasing on).
+   **Open bug (2026-11-14): startup freeze while archiving a large previous log.** Starting the installed
+   `jazz2-gx2` for step 1 froze on the boot screen. `Jazz2.log` on the card was still the 1.1 MB log of the last
+   variants run (earlier launches archived logs of up to about 180 KB) and a new, empty `Jazz2.log.gz.tmp` was
+   left behind, so it stopped inside `ArchivePreviousLogFile()` (`Sources/nCine/Application.cpp`), in the
+   `WriteLogArchivePart()` of the staging file. Whether it crashed or only hung is not known (the file is
+   buffered, so empty does not mean nothing ran). The card's state (`Jazz2.log`, `Jazz2.log.gz`, the empty
+   `.tmp`, `Jazz2.config`) is saved in `~/jazz2-wiiu-test/console-bench/final/crash-startup/` for a Cemu
+   repro. Workaround until fixed: delete `Jazz2.log` from the card after copying it off, before the next launch.
 
 ## Backend contract (what to write)
 
