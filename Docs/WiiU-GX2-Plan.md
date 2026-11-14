@@ -844,7 +844,9 @@ Next, by expected gain:
    `A-700k.log` (input < 1 MiB, output ~66 KB: output threshold only), `B-1.1M-compressible.log` (input > 1 MiB,
    output ~54 KB: input threshold only), `C-600k.log` (~57 KB, control). Also relaunch once with the original
    `crash-startup/Jazz2.log` to see whether it freezes every time. Aroma's logging module capturing `OSReport`
-   would show where it stops.
+   would show where it stops. **Parked by the owner (2026-11-14).** Fallback if it is never found: skip the log
+   file (and so its archive) when a marker file such as `nodebug.txt` is present next to the game, and ship that
+   file in the default release packages.
 
 ## Backend contract (what to write)
 
