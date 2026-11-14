@@ -67,7 +67,9 @@ namespace nCine::RHI::GX2
 		  the old block is retired) or waits for the token;
 		- blocks of destroyed or reallocated resources are freed only when their token has retired
 		  (@ref RetireBlock()).
-		The present keeps `GX2WaitForFlip()` for pacing, which also keeps the CPU at most about a frame ahead.
+		The present submits the frame's draws first and then waits for the previous swap to flip before it
+		records the scan copies (@ref WaitForPreviousFlip()): the GPU draws one frame while the CPU records the
+		next, and the CPU stays at most about a frame ahead of the scan-out.
 	*/
 	class Gx2Device
 	{
@@ -302,6 +304,8 @@ namespace nCine::RHI::GX2
 		static bool _inForeground;
 		static bool _vsync;
 		static bool _firstFrame;
+		/** @brief Token of the batch that carried the last `GX2SwapScanBuffers()`, 0 if none */
+		static std::uint32_t _swapToken;
 		static std::uint32_t _frameCounter;
 		/** @brief Set whenever the colour buffer, viewport or scissor may have changed since the last draw */
 		static bool _targetDirty;
@@ -369,6 +373,8 @@ namespace nCine::RHI::GX2
 		static void FlushBatch();
 		/** @brief Returns the GX2 timestamp that covers the submitted batch of @p token */
 		static OSTime GetBatchStamp(std::uint32_t token);
+		/** @brief Waits until the swap queued by the previous present has flipped, so its scan buffer is free again */
+		static void WaitForPreviousFlip();
 		/**
 			@brief Returns 256-byte aligned memory for one draw's uniform block
 
