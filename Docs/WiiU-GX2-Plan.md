@@ -9,7 +9,8 @@ and 6A (the CPU no longer waits for the GPU every frame) are done; see "Spike re
 owner's console (Aroma), much more smoothly than `Software`, and outputs 1080p there. Three-player
 splitscreen has correct colours on the console (2026-11-14), which confirms that the wrong colours in Cemu
 come from Cemu's shader translation (see "Cemu tests"). `GX2` is now the default (milestone 7 is done).
-Still to check on the console: the batching and instancing paths, and the tile-layer window cache.
+Still to check on the console: the batching and instancing paths, and the tile-layer window cache (benchmark
+packages are built, see "Testing").
 
 ## Decisions
 
@@ -532,5 +533,14 @@ wrong colours**: brown walls turn magenta, green turns blue. The average colour 
   to get the intro and menu again. Level names are the folders under `Cache/Episodes` (e.g. `prince/castle1`,
   `rescue/psych3` dark, `rescue/beach2` water). `python3 -I ~/jazz2-wiiu-test/scripts/scan_levels.py
   ~/jazz2-game/jazz2 208` lists the original levels with their start lighting and whether they set a water level.
+- Console benchmark (2026-11-14): `~/jazz2-wiiu-test/patches/bench-hook.patch` (local only, never commit) is the
+  autolevel hook plus a benchmark mode. If `bench.txt` (`<episode>/<level> <rescale> <players> [noZoomOut]` per
+  line) is next to the game, it plays each test with every player running and jumping: 6 s warm-up, 15 s with
+  batching on, 15 s with it off, then writes frame times, missed frames, phase times, draw calls and the GX2
+  `flipWait`/`gpuWait` counters to `bench-<variant>.txt` and returns to the menu. The variant is `cache` when built
+  with `-DWIIU_TEST_WINDOW_CACHE` in `CMAKE_CXX_FLAGS_RELEASE` (`_build_wiiu_gx2_cache/`, turns on
+  `TILEMAP_CACHE_LAYER_WINDOW` for GX2), else `nocache`. Packages and the test list for the console are in
+  `~/jazz2-wiiu-test/console-bench/`. In Cemu (meaningless for speed) the `cache` build dropped the visit phase from
+  1.6 to 0.1 ms and lost the `gpuWait` stalls entirely; console results pending.
 - Cemu's graphics API is OpenGL (`<api>0</api>` in `settings.xml`); Vulkan (`1`, lavapipe in the container)
   also works and behaved the same in milestone 5.
