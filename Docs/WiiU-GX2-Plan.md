@@ -581,6 +581,17 @@ Conclusions:
   with `-DWIIU_TEST_WINDOW_CACHE` in `CMAKE_CXX_FLAGS_RELEASE` (`_build_wiiu_gx2_cache/`, turns on
   `TILEMAP_CACHE_LAYER_WINDOW` for GX2), else `nocache`. Packages and the test list for the console are in
   `~/jazz2-wiiu-test/console-bench/`. In Cemu (meaningless for speed) the `cache` build dropped the visit phase from
-  1.6 to 0.1 ms and lost the `gpuWait` stalls entirely; console results pending.
+  1.6 to 0.1 ms and lost the `gpuWait` stalls entirely; console results: see "Console benchmark".
+- GPU timers (2026-11-14): `~/jazz2-wiiu-test/patches/bench-gpu-hook.patch` (local only, never commit; it replaces
+  `bench-hook.patch`, whose `TileMap.h` part is obsolete now that the cache is on) adds per-viewport GPU times to the
+  benchmark: `GX2SampleBottomGPUCycle()` (exported by gx2.rpl, not declared by wut) at the start and end of every
+  `Viewport::DrawContents()` and around the scan-buffer copies, read back three frames later and converted with
+  `GX2GPUTimeToCPUTime()`. Viewports are named in `PlayerViewport::Register()` and `UpscaleRenderPass::Register()`.
+  Each phase gets `gpu <ms> <draws> <viewport>` rows and a check line (the start-to-start period should match the
+  frame time). **Cemu writes `0xFFFF...` for every sample** (its `GX2SampleBottomGPUCycle` is a stub), so the rows
+  only appear on a console; Cemu runs show all frames as `invalid`. Package and test list:
+  `~/jazz2-wiiu-test/console-bench/gpu/`. A Cemu run with CPU-clock stand-ins showed the four-player chain: four
+  times scene, light and blur (720x406 each with Zoom out), then `compose` 720x405 and 1440x810 (supersampled 2x),
+  an `antialias` target of 2880x1620, and the 1080p screen.
 - Cemu's graphics API is OpenGL (`<api>0</api>` in `settings.xml`); Vulkan (`1`, lavapipe in the container)
   also works and behaved the same in milestone 5.
