@@ -535,6 +535,89 @@ What to do, by expected gain:
 4. Hide 3xBRZ, SABR and CleanEdge on GX2.
 5. Render targets in MEM1: probably faster, but wiiu-sdl2 owns MEM1 (see `Gx2Memory.h`).
 
+### Next console benchmark: variants (planned 2026-11-14, not started)
+
+Cemu can check these variants for correctness (no hangs, no corrupted frames) but not for speed: its GPU
+timer is a stub, it renders on the host (lavapipe/llvmpipe in the container), and it has no MEM1/MEM2
+difference. So every variant is checked in Cemu first and measured in one console session.
+
+Findings that shape the variants (three read-only investigations, 2026-11-14):
+- **A frame in flight is already safe for our resources.** The streaming ring (3 sections,
+  `RenderBuffersManager.h:98`), the uniform ring, `Gx2Texture::EnsureGpuTexture` (moves a texture still in
+  use to a new block), `Gx2BufferObject::PrepareCpuWrite` and `RetireBlock` all go through the tokens, and
+  `WaitForUse` already flushes mid-frame. These paths almost never run today because the GPU is idle
+  whenever the CPU writes; with overlap they will. Watch: per-frame rewrites (palette) take new MEM2
+  blocks, and more than 64 retired blocks in about two frames makes `RetireBlock` fall back to `Finish()`;
+  the 4 MB uniform ring (`Gx2Device.h:316`) must hold about two frames ("uniform ring caught up" warning);
+  `BatchStampCount` = 16 (`Gx2Device.h:262`) errs towards waiting, raise it to 64 with mid-frame flushes.
+  The single `_screenBuffer` is not a hazard (the GPU queue is in order).
+- **The scan buffers are the constraint.** SDL sets them up double-buffered (`SDL_wiiuvideo.c:97,105`) and
+  nothing on the GPU side waits before a scan copy, so the copy must not be recorded while the previous
+  swap is still waiting to flip. RetroArch's `gx2_gfx.c` waits for the previous flip first.
+  `GX2WaitForFlip()` returns at the next flip (at once if none is pending); `GX2WaitTimeStamp()` does not
+  cover flips.
+- **MEM1 is reachable.** wiiu-sdl2 sends GX2R resources flagged `BIND_COLOR_BUFFER`, `BIND_DEPTH_BUFFER`,
+  `BIND_SCAN_BUFFER` or `USAGE_FORCE_MEM1` to its MEM1 heap (see the SDL coexistence notes above; the
+  spike got a colour surface at `0xF4000800`). The scan buffers come from the foreground heap, not MEM1, so
+  the comment at the screen-buffer fallback in `Gx2Device.cpp` ("shares MEM1 with SDL's scan buffers") is
+  wrong. Budget: screen 8.3 MB + compose 1440x810 4.7 MB + four 720x406 viewport targets 4.7 MB = 17.7 MB
+  fits; the 2880x1620 antialias target (18.7 MB) stays in MEM2. MEM1 targets must be freed in
+  `EnterBackground()` and recreated in `EnterForeground()` (SDL destroys the heap); their contents are
+  redrawn every frame anyway.
+- **Supersampling** is chosen in `LevelHandler::GetViewportSetup()` (`Supersample = 2` with Zoom out and 3+
+  viewports). Turning it off is not "Zoom out off detail": each player's full-size view is then minified to
+  about half size (see the comment there), so pixel art loses every other pixel.
+
+Variants, selected per test by a new column in `bench.txt` (runtime switches in the local benchmark patch,
+so one package covers them), except MEM1, which needs its own build:
+
+| ID | Change |
+|---|---|
+| A | none (baseline in the same session) |
+| B1 | split present: `FlushBatch()` first, then wait for the previous frame's flip (`GX2GetSwapStatus()`, `while (flipCount < swapCount) GX2WaitForFlip()`), then the scan copies, `RestoreContextState()`, `GX2SwapScanBuffers()`, `FlushBatch()`; no wait at the end of `PresentFrame()` |
+| B2 | only move that wait to before the scan copies, one flush per frame |
+| B3 | today's pacing, plus `FlushBatch()` at each render-target switch that had draws (`SetRenderTarget`) |
+| B13 | B1 + B3 |
+| C | B13 + no antialiasing subpass when only supersampling asks for it (`UpscaleRenderPass.cpp`, the `_supersample > 1 \|\| useAntialiasing` condition); the screen pass scales 1440x810 to 1080p with the bicubic shader |
+| D | C with a linear scale |
+| E | B13 + `Supersample = 1` (cost reference; looks worse) |
+| F | C + lighting at 50% (`PlayerViewport.cpp`, lighting buffer size) |
+| G | B13 + no GamePad copy after the first frame of the level |
+| G2 | B13 + GamePad copy every other frame |
+
+Expected (from the console numbers, not measured): B1/B13 take 4 players with Zoom out off from 30 to
+60 fps and 3-4 players with Zoom out from 20 to 30 fps, at one frame of extra latency; B2 the same with only
+0.8 ms to spare in the 4-player Zoom-out case; B3 alone gives 60 fps with Zoom out off (about 15 ms) but
+stays at 20 fps with Zoom out. C saves about 10-12 ms, E about 15 ms, F 1-2 ms. G saves the GamePad share of
+the 4.2 ms scan copy (it reads the whole 8.3 MB screen buffer again; perhaps about 2 ms). G/G2 can only ship
+as an option: off-TV play needs the GamePad image.
+
+Benchmark additions: separate GPU timer rows for the TV and the GamePad copy; counters for uniform-ring
+waits and for `RetireBlock` falling back to `Finish()`; `BatchStampCount` 64. Fix the patch's name table
+(96 entries, never cleared): clear it on level load.
+
+Tests (`prince/castle1` unless noted, 15 s each):
+
+| Test | MEM2 package | MEM1 package |
+|---|---|---|
+| 1 player | A, B1, B2, B3, B13, G, G2 | A, B13 |
+| 2 players | A, B1, B2, B3, B13 | A, B13 |
+| 4 players, Zoom out off | A, B1, B2, B3, B13 | A, B13 |
+| 3 players, Zoom out | A, B13, C | A, B13, C |
+| 4 players, Zoom out | A, B1, B2, B3, B13, C, D, E, F, G, G2 | A, B13, C, F |
+| `rescue/beach2`, 4 players, Zoom out | A, B1, B2, B3, B13, C, D, E, F | A, B13, C, F |
+
+About 40 tests (10 min) in the MEM2 package and 17 (4.5 min) in the MEM1 package. The owner also judges
+by eye during the 4-player Zoom-out tests (C, D, E: shimmer when the camera moves, softness) and does one
+HOME round trip with the MEM1 package. Batching off and the rescale modes are left out (batching barely
+changes the GPU time; the rescale modes are already measured and should be hidden on GX2).
+
+Order of work: the variant switches in the benchmark patch (`~/jazz2-wiiu-test/patches/`, local only), B1-B3
+and C-G in the backend and renderer behind those switches, GX2R allocation with MEM2 fallback for the MEM1
+build, Cemu checks of every variant (frames correct, no deadlock, no new warnings), then both packages and
+a test list in `~/jazz2-wiiu-test/console-bench/`. Left for a later round: a 1280x720 screen target (chosen at
+startup), composing straight at 1920x1080, RGB565 intermediate targets.
+
 ## Backend contract (what to write)
 
 - `RhiFwd.h`: a `WITH_RHI_GX2` arm with capability macros (`RHI_CAP_SHADERS`, `_FRAMEBUFFERS`,
