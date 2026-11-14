@@ -1,14 +1,14 @@
 # Wii U: native GX2 rendering backend (plan and hand-off)
 
-Status (2026-11-14): branch `wiiu-port` has a working Wii U port with two RHIs: `Software` (the default,
-presenting through wiiu-sdl2's GX2 renderer) and the native `GX2` backend (see the Wii U section of
+Status (2026-11-14): branch `wiiu-port` has a working Wii U port with two RHIs: the native `GX2` backend (the
+default since 2026-11-14) and `Software` (the fallback, presenting through wiiu-sdl2's GX2 renderer) (see the Wii U section of
 `Docs/Consoles.dox`). Milestones 1 and 2 (the spikes), 3 (the backend skeleton with clear and present),
 4 (shaders, uniforms, textures; the main menu renders), 5 (levels, render targets and all rescale shaders)
 and 6A (the CPU no longer waits for the GPU every frame) are done; see "Spike results" and the
 "Milestone N results" sections below. Milestone 7's docs and CI are done too. The GX2 build runs on the
 owner's console (Aroma), much more smoothly than `Software`, and outputs 1080p there. Three-player
 splitscreen has correct colours on the console (2026-11-14), which confirms that the wrong colours in Cemu
-come from Cemu's shader translation (see "Cemu tests"). Next step: make `GX2` the default (milestone 7).
+come from Cemu's shader translation (see "Cemu tests"). `GX2` is now the default (milestone 7 is done).
 Still to check on the console: the batching and instancing paths, and the tile-layer window cache.
 
 ## Decisions
@@ -172,7 +172,7 @@ What is in place:
   Untested: Cemu has no HOME menu; needs the console.
 - `SdlGfxDevice`: window flags 0, drawable size from `GetScreenWidth/Height()`, `CreateSwapchain` after
   the window, `PresentFrame()` in the update arm, no GL context teardown. `AboutSection` shows "GX2".
-- CMake: `NCINE_PREFERRED_RHI` accepts `Software` (default) or `GX2` on the Wii U; nothing extra to
+- CMake: `NCINE_PREFERRED_RHI` accepts `Software` (then the default) or `GX2` on the Wii U; nothing extra to
   link (coreinit and gx2 are part of wut).
 
 Open points for milestone 4:
@@ -483,8 +483,8 @@ wrong colours**: brown walls turn magenta, green turns blue. The average colour 
 7. Docs and CI: **done** (2026-11-13). `Docs/Consoles.dox` describes both backends (Software stays the
    default), `Docs/ShaderCompiler.dox` documents `--emit-gx2`, and `.github/workflows/wiiu.yml` builds both
    (`Jazz2_WiiU` and `Jazz2_WiiU_GX2`). The console tests are done (GX2 runs, 1080p, three-player
-   splitscreen). Still open: making `GX2` the default (`cmake/ncine_options.cmake`, the Consoles.dox table
-   and section, the CI artifact names).
+   splitscreen). `GX2` is the default since 2026-11-14 (`cmake/ncine_options.cmake`, `Docs/Consoles.dox`,
+   `Docs/Building.dox`); CI now names the GX2 package `Jazz2_WiiU` and the Software one `Jazz2_WiiU_Software`.
 
 ## Testing
 
