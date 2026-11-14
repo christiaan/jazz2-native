@@ -9,8 +9,8 @@ and 6A (the CPU no longer waits for the GPU every frame) are done; see "Spike re
 owner's console (Aroma), much more smoothly than `Software`, and outputs 1080p there. Three-player
 splitscreen has correct colours on the console (2026-11-14), which confirms that the wrong colours in Cemu
 come from Cemu's shader translation (see "Cemu tests"). `GX2` is now the default (milestone 7 is done).
-The console benchmark (2026-11-14, see "Console benchmark") favours the tile-layer window cache and batching,
-and shows that four players and the 3xBRZ, SABR and CleanEdge rescale modes are GPU-bound at 1080p.
+The console benchmark (2026-11-14, see "Console benchmark") led to turning the tile-layer window cache on for GX2
+and keeping batching on, and shows that four players and the 3xBRZ, SABR and CleanEdge rescale modes are GPU-bound at 1080p.
 
 ## Decisions
 
@@ -382,8 +382,8 @@ The local test hook (see Testing) now also makes every player run and jump, and 
 four players.
 
 **Scrolling.** `prince/castle1` with the player running back and forth renders without missing or garbled tiles.
-The tile layers do not use custom buffers on GX2, though: `TILEMAP_CACHE_LAYER_WINDOW` (`Jazz2/Tiles/TileMap.h`)
-is only defined for GL, D3D11, Vulkan, Metal and the GX/PICA/GS/GU tiers, so on GX2 every layer's quads go
+The tile layers did not use custom buffers on GX2 then (the console benchmark later turned the cache on, see
+"Console benchmark"): `TILEMAP_CACHE_LAYER_WINDOW` (`Jazz2/Tiles/TileMap.h`) was only defined for GL, D3D11, Vulkan, Metal and the GX/PICA/GS/GU tiers, so on GX2 every layer's quads go
 through the streaming ring each frame, and in normal play nothing calls the buffer rename or wait paths of
 `Gx2BufferObject::PrepareCpuWrite()`. To exercise them, a temporary build added `WITH_RHI_GX2` to that list:
 the window cache then rewrote 48 KB tile buffers about 60 times a second while scrolling. Cemu's GPU had always
@@ -464,7 +464,7 @@ with no rescaling, so the rescale pass at 1920x1080 costs the GPU about 33 ms (3
 (CleanEdge). The CRT and Monochrome modes were not tested.
 
 Conclusions:
-- **Tile-layer window cache: worth turning on.** It cuts visit by about 70% and draw by about 75% with one
+- **Tile-layer window cache: turned on for GX2** (`WITH_RHI_GX2` in the list in `Jazz2/Tiles/TileMap.h`). It cuts visit by about 70% and draw by about 75% with one
   player, and halves the CPU time with four. No case got slower, and the frame rates did not change, because
   every test is either at 60 fps already or limited by the GPU.
 - **Batching: keep it on.** On GX2 a batch is instanced sprites read from a uniform block, so this also
@@ -519,7 +519,7 @@ Conclusions:
    Scrolling and splitscreen checked in Cemu (see above); the `Antialiasing` colour bug with 3+
    players is Cemu's (confirmed on the console, 2026-11-14). The 1280x720 window cap is gone: GX2 builds
    output 1080p (commit `c90db7b8`, tested on the console). Measured on the console (see "Console benchmark"):
-   the tile-layer window cache should be turned on for GX2, batching stays on. Still open: four-player GPU
+   the tile-layer window cache is now on for GX2, batching stays on. Still open: four-player GPU
    cost and the heavy rescale modes at 1080p.
 7. Docs and CI: **done** (2026-11-13). `Docs/Consoles.dox` describes both backends (Software stays the
    default), `Docs/ShaderCompiler.dox` documents `--emit-gx2`, and `.github/workflows/wiiu.yml` builds both
