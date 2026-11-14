@@ -351,6 +351,21 @@ namespace Death { namespace IO {
 			// "romfs" is the longest name there
 			constexpr std::size_t MaxMountPointLength = 5;
 #		endif
+#		if defined(DEATH_TARGET_WIIU)
+			// On the console, "fs:/vol" is no directory that stat() or mkdir() can reach, only the devices mounted
+			// under it are ("fs:/vol/external01", "fs:/vol/content"). So the device is part of the root, otherwise
+			// CreateDirectories() tries to create "fs:/vol" and fails. Cemu does report "fs:/vol", which hid it.
+			if (path.hasPrefix("fs:/vol/"_s)) {
+				std::size_t i = sizeof("fs:/vol/") - 1;
+				while (i < path.size() && path[i] != '/' && path[i] != '\\') {
+					i++;
+				}
+				if (i < path.size()) {
+					i++;
+				}
+				return i;
+			}
+#		endif
 			// The colon comes after the name, so for the longest one it is at index MaxMountPointLength - with
 			// the bound exclusive, "romfs:" was taken for a relative path and GetAbsolutePath() failed on it
 			for (std::size_t i = 0; i <= MaxMountPointLength && i < path.size(); i++) {
