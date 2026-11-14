@@ -1030,10 +1030,12 @@ Cemu shows with coreinit logging on.
 -   With `GX2` and <b>Zoom out</b> with three or four players, the supersampled scene is scaled to the
     screen with a plain linear filter instead of the antialiasing pass other platforms use, which costs
     the console about 11 ms per frame at 1080p. Turning on <b>Antialiasing</b> or a rescale mode brings
-    the full pass back. The GPU draws one frame while the game prepares the next, so the picture is up
+    the full pass back, and with it the cost: with four players and Zoom out at 1080p, <b>Antialiasing</b>
+    drops the game from 60 to about 43 fps on the console; with it off, every setup measured there holds
+    60 fps. The GPU draws one frame while the game prepares the next, so the picture is up
     to one frame later than with `Software`.
--   With `GX2`, the batching and instancing paths, and tile layers while scrolling, have not been
-    checked on a console yet. Cemu's frame rate says nothing about the console's.
+-   With `GX2`, batched sprites (drawn as instances from a uniform block) and tile layers while
+    scrolling run on the console without problems. Cemu's frame rate says nothing about the console's.
 -   No online multiplayer, update check or level pack downloads: the console's network stack is not
     brought up. Local multiplayer works with any mix of the GamePad, Pro Controllers and Wii Remotes.
 -   Asynchronous tracing is off, because the RPX format has no thread-local storage.

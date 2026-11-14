@@ -820,7 +820,8 @@ Next, by expected gain:
    TV and GamePad (log: `EnterBackground()`/`EnterForeground()`, no errors). Log noise only the known missing Lori
    and `sugar_rush.wav` assets. Conclusions: F (lighting at 50%) is not needed; B1's judder and the swap interval
    of 2 are moot while frames fit in 16.7 ms; the Antialiasing option is the only slow path left at 1080p with 4
-   players (it could fall back to the linear resolve, or be documented as expensive).
+   players. Decided (2026-11-14): keep the option as the PS3 port does and document the cost in
+   `Docs/Consoles.dox` (Wii U limits) rather than fall back to the linear resolve.
    **Open bug (2026-11-14): startup freeze while archiving a large previous log.** Starting the installed
    `jazz2-gx2` for step 1 froze on the boot screen. `Jazz2.log` on the card was still the 1.1 MB log of the last
    variants run (earlier launches archived logs of up to 524 KB, in about 0.33 s) and a new, empty `Jazz2.log.gz.tmp` was
