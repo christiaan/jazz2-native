@@ -1,0 +1,98 @@
+diff --git a/Sources/Jazz2/LevelHandler.cpp b/Sources/Jazz2/LevelHandler.cpp
+index 6898c837..a39ad227 100644
+--- a/Sources/Jazz2/LevelHandler.cpp
++++ b/Sources/Jazz2/LevelHandler.cpp
+@@ -48,6 +48,10 @@
+ #include <Utf8.h>
+ 
+ using namespace nCine;
++#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit)
++extern bool WiiUTestHookWalk;
++#endif
++
+ using namespace Jazz2::Tiles;
+ 
+ namespace Jazz2
+@@ -3578,6 +3582,23 @@ namespace Jazz2
+ 			input.RequiredMovement = processedInput.Movement;
+ 		}
+ 
++#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit)
++		{
++			static std::uint32_t frame = 0;
++			if (::WiiUTestHookWalk) {
++				frame++;
++				// Run right, jump for 20 of every 70 frames, turn around every 900 frames; player 2+ mirror it
++				bool left = ((frame / 900) & 1) != 0;
++				for (std::int32_t i = 0; i < ControlScheme::MaxSupportedPlayers; i++) {
++					auto& in = _playerInputs[i];
++					in.PressedActions |= (1 << (std::int32_t)(left ? PlayerAction::Left : PlayerAction::Right)) | (1 << (std::int32_t)PlayerAction::Run);
++					if ((frame % 70) < 20) in.PressedActions |= (1 << (std::int32_t)PlayerAction::Jump);
++					in.RequiredMovement.X = (left ? -1.0f : 1.0f);
++				}
++			}
++		}
++#endif
++
+ 		// Also apply overriden actions (by touch controls)
+ 		{
+ 			auto& input = _playerInputs[0];
+diff --git a/Sources/Main.cpp b/Sources/Main.cpp
+index 9d561c62..ff0264a7 100644
+--- a/Sources/Main.cpp
++++ b/Sources/Main.cpp
+@@ -487,6 +487,10 @@ void GameEventHandler::OnPreInitialize(AppConfiguration& config)
+ 	}
+ }
+ 
++#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit)
++bool WiiUTestHookWalk = false;
++#endif
++
+ void GameEventHandler::OnInitialize()
+ {
+ 	ZoneScopedC(0x888888);
+@@ -647,6 +651,43 @@ void GameEventHandler::OnInitialize()
+ 	}
+ #	endif
+ 
++#	if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit)
++	{
++		String autoPath = fs::CombinePath(fs::GetDirectoryName(ContentResolver::Get().GetSourcePath()), "autolevel.txt"_s);
++		auto s = fs::Open(autoPath, FileAccess::Read);
++		if (s->IsValid()) {
++			char buf[64] {}; s->Read(buf, sizeof(buf) - 1);
++			// Format: "<level> [rescale] [players] [walk] [noZoomOut]"
++			String levelName = StringView(buf).trimmed();
++			std::int32_t args[4] {}; std::int32_t argCount = 0;
++			if (auto sp = levelName.find(' ')) {
++				const char* p = sp.end();
++				while (argCount < 4 && *p != '\0') {
++					char* end; long v = std::strtol(p, &end, 10);
++					if (end == p) break;
++					args[argCount++] = std::int32_t(v); p = end;
++				}
++				levelName = levelName.prefix(sp.begin());
++			}
++			PreferencesCache::ActiveRescaleMode = (RescaleMode)args[0];
++			std::int32_t playerCount = (args[1] >= 1 && args[1] <= 4 ? args[1] : 1);
++			extern bool WiiUTestHookWalk; WiiUTestHookWalk = (args[2] != 0);
++			if (args[3] != 0) PreferencesCache::PreferZoomOut = false;
++			LOGI("WIIU_TEST_HOOK: starting level \"{}\" rescale {} players {} walk {}", levelName, args[0], playerCount, args[2]);
++			PlayerType players[4] = { PlayerType::Jazz, PlayerType::Spaz, PlayerType::Jazz, PlayerType::Spaz }; // No Lori: the test data has no TSF files
++			LevelInitialization levelInit(levelName, GameDifficulty::Normal, PreferencesCache::EnableReforgedGameplay, false, arrayView(players, playerCount));
++#		if defined(WITH_MULTIPLAYER)
++			if (playerCount > 1) {
++				levelInit.LocalMultiplayerGameMode = (std::uint8_t)MpGameMode::Cooperation;
++			}
++#		endif
++			WaitForVerify();
++			ChangeLevel(Death::move(levelInit));
++			return;
++		}
++	}
++#	endif
++
+ #	if defined(WITH_THREADS) && !defined(DEATH_TARGET_EMSCRIPTEN)
+ 	SetStateHandler(std::make_shared<Cinematics>(this, "intro"_s, [](IRootController* root, bool endOfStream) mutable {
+ 		if ((root->GetFlags() & Flags::IsVerified) == Flags::IsVerified) {

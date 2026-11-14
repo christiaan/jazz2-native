@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.13)
+project(gx2spike C)
+find_package(SDL2 REQUIRED)
+add_executable(gx2spike main.c)
+target_link_libraries(gx2spike SDL2::SDL2-static)
+wut_create_rpx(gx2spike)
+wut_create_wuhb(gx2spike NAME "GX2Spike" SHORTNAME "GX2Spike" AUTHOR "test")

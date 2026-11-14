@@ -42,7 +42,8 @@ of "Next" under "Variant results").
 
 ## Spike results (milestones 1 and 2, 2026-11-13)
 
-Spike code and tools are kept outside the repo in `~/jazz2-wiiu-test/spikes/`.
+Spike code and tools are in `Tools/WiiU/spikes/` (moved into the repo 2026-11-14; build outputs and the CafeGLSL
+release stay in `~/jazz2-wiiu-test/spikes/`).
 
 ### Milestone 1: render on SDL's GX2 setup
 
@@ -75,7 +76,7 @@ What wiiu-sdl2's video driver does (`src/video/wiiu/SDL_wiiuvideo.c`, `SDL_wiiu_
   through it would need the backend to call it (it is an internal SDL symbol). The game does not need
   it today.
 
-Verified in Cemu with a standalone program (`~/jazz2-wiiu-test/spikes/gx2-sdl/main.c`, built with the
+Verified in Cemu with a standalone program (`Tools/WiiU/spikes/gx2-sdl/main.c`, built with the
 devkitppc image and wut's CMake, run with its `run.sh` in the `cemu-xvfb` container):
 `SDL_Init(VIDEO|AUDIO|JOYSTICK|GAMECONTROLLER)`, `SDL_CreateWindow(..., 1280, 720, 0)`, then
 `GX2SetupContextStateEx(ctx, TRUE)`/`GX2SetContextState`, a 1280x720 colour buffer from
@@ -133,7 +134,7 @@ generated headers (the `WITH_RHI_GL && !RHI_GL_PROFILE_ES2` strings). Prelude as
   only the block-level reflection it needs, not embed the whole GFD reflection.
 - Not tested yet: the other variants (`Combine_DITHER_*` etc.) and the remaining programs.
 
-Tools in `~/jazz2-wiiu-test/spikes/cafeglsl/`: `rel/` (the release), `extract.py` (pulls the GLSL out of
+Tools in `~/jazz2-wiiu-test/spikes/cafeglsl/` (`extract.py` and `dump.cpp` now in `Tools/WiiU/spikes/cafeglsl/`): `rel/` (the release), `extract.py` (pulls the GLSL out of
 the generated headers), `dump.cpp`/`dump` (prints the reflection through `libcafeglsl.a`; run from `t/`
 as `../dump Name...`), and `t/` with the test sources, `.gsh` outputs and disassembly logs.
 
@@ -832,7 +833,7 @@ Next, by expected gain:
    repro. Workaround until fixed: delete `Jazz2.log` from the card after copying it off, before the next launch.
    **Not reproducible in Cemu (2026-11-14).** `wiiu-port` HEAD booted to the menu with the exact card state, with
    log + `.gz`, and with the log alone; each archive passed `gzip -t` (the log-only one unpacks byte-identical) and
-   the `.tmp` was removed. Script: `~/jazz2-wiiu-test/scripts/repro-logarchive.sh` (`STATE="log gz tmp"`,
+   the `.tmp` was removed. Script: `Tools/WiiU/repro-logarchive.sh` (`STATE="log gz tmp"`,
    `NOREPACK=1`; `testrun.sh` deletes `Jazz2.log` first, so it can't be used for this). Ruled out: plain slowness
    (524 KB took ≤ 0.33 s on the console), a size-dependent loop in `DeflateWriter`/`FileStream`/the archive walk
    (zlib 1.3.1; `FileStream` retries only on `EINTR`, which wut's FSA layer never returns; wut's seek calls
@@ -899,16 +900,19 @@ Next, by expected gain:
 
 ## Testing
 
+The scripts below are in `Tools/WiiU/` (setup and usage: `Tools/WiiU/README.md`); their working files
+(Cemu, bundles, screenshots, logs, console packages) stay in `~/jazz2-wiiu-test/` (`$WIIU_TEST_DIR`).
+
 - Build: `devkitpro/devkitppc` Docker image, `-D CMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/WiiU.cmake`.
-  `_build_wiiu/` is the Software build, `_build_wiiu_gx2/` the GX2 one. `~/jazz2-wiiu-test/scripts/build_gx2.sh`
+  `_build_wiiu/` is the Software build, `_build_wiiu_gx2/` the GX2 one. `Tools/WiiU/build.sh`
   configures (first time) and builds `$B` (default `_build_wiiu_gx2`), keeps the log in
   `~/jazz2-wiiu-test/build.log` and prints only errors. A full GX2 build from scratch takes a few minutes.
 - Cemu 2.6 runs headless under Xvfb in a container (`~/jazz2-wiiu-test/`: `cemu/` extracted AppImage
   in portable mode with a preseeded `settings.xml` that skips the first-run wizard, image
-  `cemu-xvfb`, `run.sh` takes screenshots, `B=_build_wiiu_gx2 scripts/testrun.sh` repacks and runs that build, default `_build_wiiu`).
+  `cemu-xvfb`, `Tools/WiiU/cemu/run.sh` takes screenshots, `B=_build_wiiu_gx2 Tools/WiiU/testrun.sh` repacks and runs that build, default `_build_wiiu`).
   **Cemu stops at every `tw` instruction**, including the conditional `tweq` GCC 16 emits for
   libstdc++'s `shared_ptr` overflow check. That shows up as a grey screen with the main thread parked
-  in an OS wait. `scripts/patch_tw.py` replaces conditional traps with `nop` in a test copy of the ELF
+  in an OS wait. `Tools/WiiU/patch_tw.py` replaces conditional traps with `nop` in a test copy of the ELF
   before `elf2rpl`/`wuhbtool`. Real hardware is not affected.
 - Cemu's GDB stub (`Cemu --enable-gdbstub`, port 1337) works with `powerpc-eabi-gdb` from the
   devkitPPC image (`--network container:<cemu container>`); breakpoints with `commands` gave the
@@ -926,22 +930,22 @@ Next, by expected gain:
 - Shader problems in Cemu: start Cemu without the game, turn on Debug > Dump > Shaders, then load the
   game with File > Load; Cemu writes its GLSL translation of every shader to `portable/dump/shaders/`.
   Without a window manager this is scripted with xdotool: image `cemu-xvfb-dbg` (`cemu-xvfb` plus
-  `xdotool`, `glslang-tools`, `mesa-utils`) and `~/jazz2-wiiu-test/run_dbg.sh`, which runs `$XSTEPS`
+  `xdotool`, `glslang-tools`, `mesa-utils`) and `Tools/WiiU/cemu/run_dbg.sh`, which runs `$XSTEPS`
   (`;`-separated xdotool commands, `sleep:N`, `shot:name`) after starting Cemu with `$CEMU_ARGS`
   (default `-g /t/jazz2.wuhb`). The sequence that worked:
   `CEMU_ARGS="" XSTEPS="sleep:5;mousemove 268 12;click 1;sleep:1;key Down;key Down;key Right;sleep:1;key Down;key Return;sleep:1;mousemove 18 12;click 1;sleep:1;key Down;key Return;sleep:2;key ctrl+l;sleep:1;type /t/jazz2.wuhb;key Return;sleep:15;shot:m1"`.
   `glslangValidator` on a dumped `.txt` shows why Cemu rejected it.
-- `~/jazz2-wiiu-test/spikes/gx2-draw/` is a standalone program that draws `DefaultSprite` from the
+- `Tools/WiiU/spikes/gx2-draw/` is a standalone program that draws `DefaultSprite` from the
   generated header with fixed uniforms (built like the other spikes, run with its `run.sh`); use it to
   try GX2 behaviour without the engine.
 - ShaderCompiler for the host is built in the devkitPPC image into `~/jazz2-wiiu-test/sc_build`
   (`cmake -S Sources/Utilities/ShaderCompiler -B /b`); CafeGLSL's compiler is
   `~/jazz2-wiiu-test/spikes/cafeglsl/rel/cafeglsl-1.0.0-rc1-linux-x86_64/bin/glslcompiler`.
-- Levels in Cemu: with the local test hook applied (`git apply ~/jazz2-wiiu-test/patches/autolevel-hook.patch`,
+- Levels in Cemu: with the local test hook applied (`git apply Tools/WiiU/patches/autolevel-hook.patch`,
   never commit it), write `<episode>/<level> [rescale] [players] [walk] [noZoomOut]` to Cemu's `sdcard/wiiu/apps/Jazz2/autolevel.txt` and
-  run `B=_build_wiiu_gx2 SHOTS="50" scripts/testrun.sh`; the game boots straight into that level. Remove the file
+  run `B=_build_wiiu_gx2 SHOTS="50" Tools/WiiU/testrun.sh`; the game boots straight into that level. Remove the file
   to get the intro and menu again. Level names are the folders under `Cache/Episodes` (e.g. `prince/castle1`,
-  `rescue/psych3` dark, `rescue/beach2` water). `python3 -I ~/jazz2-wiiu-test/scripts/scan_levels.py
+  `rescue/psych3` dark, `rescue/beach2` water). `python3 -I Tools/WiiU/scan_levels.py
   ~/jazz2-game/jazz2 208` lists the original levels with their start lighting and whether they set a water level.
 - Console benchmark (2026-11-14): `~/jazz2-wiiu-test/patches/bench-hook.patch` (local only, never commit) is the
   autolevel hook plus a benchmark mode. If `bench.txt` (`<episode>/<level> <rescale> <players> [noZoomOut]` per
@@ -969,5 +973,8 @@ Next, by expected gain:
   `bench-tests-<build>.txt` (`mem2`, or `mem1` when built with `-DWIIU_TEST_MEM1`) and falls back to `bench.txt`,
   and writes `bench-<build>.txt`. To regenerate the patch: `git add -N Sources/WiiUBench.h && git diff >
   .../bench-variants-hook.patch && git reset Sources/WiiUBench.h`. See "Next console benchmark: variants".
+- The current benchmark hook (2026-11-14) is `Tools/WiiU/patches/bench-hook.patch`: the commit on top of
+  `wiiu-bench2`, which applies to `wiiu-port` and replaces the patches above (`git apply -R` removes
+  `Sources/WiiUBench.h` too). Checked from its new place: a 2 s + 3 s castle1 run in Cemu wrote `bench-mem2.txt`.
 - Cemu's graphics API is OpenGL (`<api>0</api>` in `settings.xml`); Vulkan (`1`, lavapipe in the container)
   also works and behaved the same in milestone 5.

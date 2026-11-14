@@ -1,0 +1,882 @@
+diff --git a/Sources/Jazz2/LevelHandler.cpp b/Sources/Jazz2/LevelHandler.cpp
+index 6898c837..559740d2 100644
+--- a/Sources/Jazz2/LevelHandler.cpp
++++ b/Sources/Jazz2/LevelHandler.cpp
+@@ -48,6 +48,11 @@
+ #include <Utf8.h>
+ 
+ using namespace nCine;
++#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit)
++extern bool WiiUTestHookWalk;
++#	include "../WiiUBench.h"
++#endif
++
+ using namespace Jazz2::Tiles;
+ 
+ namespace Jazz2
+@@ -806,6 +811,11 @@ namespace Jazz2
+ 		// Supersampling the shared framebuffer restores the per-player resolution; the logical coordinate space (and
+ 		// thus the HUD layout) stays unchanged.
+ 		setup.Supersample = (PreferencesCache::PreferZoomOut && _assignedViewports.size() >= 3 ? 2 : 1);
++#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit): variant E
++		if ((::WiiUBenchFlags & WiiUBenchFlag::NoSupersample) != 0) {
++			setup.Supersample = 1;
++		}
++#endif
+ 		setup.NativeOutput = false;
+ 		return setup;
+ 	}
+@@ -3578,6 +3588,23 @@ namespace Jazz2
+ 			input.RequiredMovement = processedInput.Movement;
+ 		}
+ 
++#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit)
++		{
++			static std::uint32_t frame = 0;
++			if (::WiiUTestHookWalk) {
++				frame++;
++				// Run right, jump for 20 of every 70 frames, turn around every 900 frames; player 2+ mirror it
++				bool left = ((frame / 900) & 1) != 0;
++				for (std::int32_t i = 0; i < ControlScheme::MaxSupportedPlayers; i++) {
++					auto& in = _playerInputs[i];
++					in.PressedActions |= (1 << (std::int32_t)(left ? PlayerAction::Left : PlayerAction::Right)) | (1 << (std::int32_t)PlayerAction::Run);
++					if ((frame % 70) < 20) in.PressedActions |= (1 << (std::int32_t)PlayerAction::Jump);
++					in.RequiredMovement.X = (left ? -1.0f : 1.0f);
++				}
++			}
++		}
++#endif
++
+ 		// Also apply overriden actions (by touch controls)
+ 		{
+ 			auto& input = _playerInputs[0];
+diff --git a/Sources/Jazz2/PreferencesCache.cpp b/Sources/Jazz2/PreferencesCache.cpp
+index 573c7bd1..43e83679 100644
+--- a/Sources/Jazz2/PreferencesCache.cpp
++++ b/Sources/Jazz2/PreferencesCache.cpp
+@@ -9,6 +9,9 @@
+ #include "../nCine/Base/FrameStatistics.h"
+ #include "../nCine/Base/FrameTimer.h"
+ #include "../nCine/Base/Random.h"
++#if defined(DEATH_TARGET_WIIU)
++#	include "../WiiUBench.h" // WIIU_TEST_HOOK (local only, do not commit)
++#endif
+ #include "../nCine/Graphics/RHI/RhiFwd.h"	// RHI_LOW_POWER_GPU (a header macro, not a build define)
+ 
+ #include <algorithm>
+@@ -1850,6 +1853,23 @@ namespace
+ 		// `FirstRun` is true only if config file doesn't exist yet
+ 		FirstRun = false;
+ 
++#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit): keep the benchmark's per-test values
++		// (rescale mode, Zoom out, lighting resolution) out of the config file; the owner's own values are written instead
++		struct BenchPrefsSwap {
++			RescaleMode Rescale; bool ZoomOut; std::uint8_t Lighting; bool Active;
++			BenchPrefsSwap() : Rescale(ActiveRescaleMode), ZoomOut(PreferZoomOut), Lighting(LightingResolutionPercent), Active(WiiUBenchPrefsOverridden) {
++				if (Active) {
++					ActiveRescaleMode = (RescaleMode)WiiUBenchSavedRescale;
++					PreferZoomOut = WiiUBenchSavedZoomOut;
++					LightingResolutionPercent = WiiUBenchSavedLighting;
++				}
++			}
++			~BenchPrefsSwap() {
++				if (Active) { ActiveRescaleMode = Rescale; PreferZoomOut = ZoomOut; LightingResolutionPercent = Lighting; }
++			}
++		} benchPrefsSwap;
++#endif
++
+ #if !defined(DEATH_TARGET_DREAMCAST) && !defined(DEATH_TARGET_N64)
+ 		// A memory card's (or the EEPROM's) mount point always exists and has no subdirectories to create
+ 		fs::CreateDirectories(fs::GetDirectoryName(_configPath));
+diff --git a/Sources/Jazz2/Rendering/PlayerViewport.cpp b/Sources/Jazz2/Rendering/PlayerViewport.cpp
+index 771e4765..fb4120c7 100644
+--- a/Sources/Jazz2/Rendering/PlayerViewport.cpp
++++ b/Sources/Jazz2/Rendering/PlayerViewport.cpp
+@@ -11,6 +11,14 @@
+ #include <algorithm>
+ #include <cmath>
+ 
++#if defined(WITH_RHI_GX2) // WIIU_TEST_HOOK (local only, do not commit)
++void WiiUGpuName(const void* key, const char* name);
++#	define WIIU_GPU_NAME(v, n) do { if ((v) != nullptr) ::WiiUGpuName((v), (n)); } while (false)
++#	include "../../WiiUBench.h"
++#else
++#	define WIIU_GPU_NAME(v, n) do { } while (false)
++#endif
++
+ namespace Jazz2::Rendering
+ {
+ 	namespace
+@@ -206,6 +214,24 @@ namespace Jazz2::Rendering
+ 
+ 	void PlayerViewport::Register()
+ 	{
++		// WIIU_TEST_HOOK (local only, do not commit)
++		WIIU_GPU_NAME(_view.get(), "scene");
++#if defined(RHI_CAP_POSTPROCESSING)
++		WIIU_GPU_NAME(_lightingView.get(), "light");
++		WIIU_GPU_NAME(_downsamplePass.GetView(), "blurDown");
++		WIIU_GPU_NAME(_blurPass1.GetView(), "blur1");
++		WIIU_GPU_NAME(_blurPass2.GetView(), "blur2");
++		WIIU_GPU_NAME(_blurPass3.GetView(), "blur3");
++		WIIU_GPU_NAME(_blurPass4.GetView(), "blur4");
++		WIIU_GPU_NAME(_waterCopyPass.GetView(), "waterCopy");
++#endif
++#if defined(TILEMAP_LAYER_EFFECTS)
++		WIIU_GPU_NAME(_behindCopyPass.GetView(), "behindCopy");
++		WIIU_GPU_NAME(_behindDownsamplePass.GetView(), "behindDown");
++		WIIU_GPU_NAME(_behindBlurPass1.GetView(), "behindBlur1");
++		WIIU_GPU_NAME(_behindBlurPass2.GetView(), "behindBlur2");
++		WIIU_GPU_NAME(_xrayMaskView.get(), "xrayMask");
++#endif
+ #if defined(RHI_CAP_POSTPROCESSING)
+ 		if (PreferencesCache::BlurEffects) {
+ 			// A pass the chain was shortened by (see Initialize()) is disposed and registers nothing
+diff --git a/Sources/Jazz2/Rendering/UpscaleRenderPass.cpp b/Sources/Jazz2/Rendering/UpscaleRenderPass.cpp
+index 281a9de6..8594a168 100644
+--- a/Sources/Jazz2/Rendering/UpscaleRenderPass.cpp
++++ b/Sources/Jazz2/Rendering/UpscaleRenderPass.cpp
+@@ -10,6 +10,13 @@
+ #include <algorithm>
+ #include <cmath>
+ 
++#if defined(WITH_RHI_GX2) // WIIU_TEST_HOOK (local only, do not commit)
++void WiiUGpuName(const void* key, const char* name);
++#	define WIIU_GPU_NAME(v, n) do { if ((v) != nullptr) ::WiiUGpuName((v), (n)); } while (false)
++#else
++#	define WIIU_GPU_NAME(v, n) do { } while (false)
++#endif
++
+ #if !defined(RHI_CAP_POSTPROCESSING)
+ // The direct tier (no shaders or no framebuffers - the software backend today, fixed-function console
+ // backends later) renders straight into the backend screen framebuffer, whose size the pass drives via
+@@ -299,6 +306,7 @@ namespace Jazz2::Rendering
+ 
+ 	void UpscaleRenderPass::Register()
+ 	{
++		WIIU_GPU_NAME(_view.get(), "compose"); // WIIU_TEST_HOOK (local only, do not commit)
+ 		_antialiasing.Register();
+ 
+ 		Viewport::GetChain().push_back(_view.get());
+@@ -348,6 +356,7 @@ namespace Jazz2::Rendering
+ 
+ 	void UpscaleRenderPass::AntialiasingSubpass::Register()
+ 	{
++		WIIU_GPU_NAME(_view.get(), "antialias"); // WIIU_TEST_HOOK (local only, do not commit)
+ 		if (_view != nullptr) {
+ 			Viewport::GetChain().push_back(_view.get());
+ 		}
+@@ -439,6 +448,9 @@ namespace Jazz2::Rendering
+ 
+ 	void UpscaleRenderPassWithClipping::Register()
+ 	{
++		WIIU_GPU_NAME(_view.get(), "compose"); // WIIU_TEST_HOOK (local only, do not commit)
++		WIIU_GPU_NAME(_clippedView.get(), "clipped");
++		WIIU_GPU_NAME(_overlayView.get(), "overlay");
+ 		_antialiasing.Register();
+ 
+ 		auto& chain = Viewport::GetChain();
+diff --git a/Sources/Main.cpp b/Sources/Main.cpp
+index c7e28d7b..4239964e 100644
+--- a/Sources/Main.cpp
++++ b/Sources/Main.cpp
+@@ -494,6 +494,255 @@ void GameEventHandler::OnPreInitialize(AppConfiguration& config)
+ 	}
+ }
+ 
++#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit)
++#include "nCine/Base/FrameStatistics.h"
++#include "nCine/Base/FrameTimer.h"
++#include <cstdarg>
++#include <cstdio>
++
++bool WiiUTestHookWalk = false;
++static bool BenchStill = false; // "#still" in the test list: players stand (visual comparisons)
++#	include "WiiUBench.h"
++std::uint32_t WiiUBenchFlags = 0;
++std::uint32_t WiiUBenchFrame = 0;
++std::uint32_t WiiUBenchRingWaits = 0, WiiUBenchRetireFinishes = 0;
++bool WiiUBenchMem1Hint = false;
++bool WiiUBenchPrefsOverridden = false;
++std::uint8_t WiiUBenchSavedRescale = 0, WiiUBenchSavedLighting = 100;
++bool WiiUBenchSavedZoomOut = true;
++#	if defined(WITH_RHI_GX2)
++void WiiUGpuReset();
++void WiiUGpuClearNames();
++std::size_t WiiUGpuFormat(char* out, std::size_t size);
++#	endif
++
++// Benchmark mode: "bench.txt" next to the game lists one test per line,
++// "<episode>/<level> <rescale> <players> [noZoomOut] [variant]" (variant: A, B1, B2, B3, B13, C, D, E, F, G, G2; see
++// WiiUBench.h and Docs/WiiU-GX2-Plan.md). Each test loads the level with every player running and jumping, waits a
++// few seconds, then measures 15 s. Results are rewritten after every test to "bench-<build>.txt", and the game
++// returns to the main menu when all tests are done.
++namespace WiiUBench
++{
++#	if defined(WIIU_TEST_MEM1)
++	static constexpr const char* Variant = "mem1";
++#	else
++	static constexpr const char* Variant = "mem2";
++#	endif
++	struct VariantInfo { const char* Name; std::uint32_t Flags; std::uint8_t LightingPercent; };
++	static constexpr std::uint32_t B13 = WiiUBenchFlag::SplitPresent | WiiUBenchFlag::FlushOnTarget;
++	static constexpr VariantInfo Variants[] = {
++		{ "A", 0, 0 },
++		{ "B1", WiiUBenchFlag::SplitPresent, 0 },
++		{ "B2", WiiUBenchFlag::WaitBeforeCopy, 0 },
++		{ "B3", WiiUBenchFlag::FlushOnTarget, 0 },
++		{ "B13", B13, 0 },
++		{ "C", B13 | WiiUBenchFlag::DirectResolve, 0 },
++		{ "D", B13 | WiiUBenchFlag::DirectResolve | WiiUBenchFlag::LinearResolve, 0 },
++		{ "E", B13 | WiiUBenchFlag::NoSupersample, 0 },
++		{ "F", B13 | WiiUBenchFlag::DirectResolve, 50 },
++		{ "G", B13 | WiiUBenchFlag::DrcOnce, 0 },
++		{ "G2", B13 | WiiUBenchFlag::DrcEveryOther, 0 },
++	};
++	// A line "#seconds <warmup> <measure>" in bench.txt overrides these (short runs in Cemu)
++	static float WarmupSeconds = 6.0f;
++	static float MeasureSeconds = 15.0f;
++	static constexpr float SkipSnapshotSeconds = 0.6f;	// The first snapshot of a phase still averages the previous one
++
++	struct Test { char Level[48]; std::int32_t Rescale; std::int32_t Players; bool NoZoomOut; std::int32_t VariantIndex; };
++	struct Acc {
++		std::uint32_t Frames, Slow, VerySlow; double Sum; float Max;
++		double SnapFrames; double Phases[(std::size_t)FrameStatistics::Phase::Count]; double DrawCalls, Commands;
++		double CounterSums[FrameStatistics::MaxCounters]; const char* CounterNames[FrameStatistics::MaxCounters]; std::uint32_t CounterCount;
++	};
++	enum class State { Idle, Warmup, Measure, Finished };
++
++	static Test Tests[64]; static std::int32_t TestCount = 0, Current = -1;
++	static State CurrentState = State::Idle;
++	static TimeStamp PhaseStart; static std::uint32_t LastSequence = 0;
++	static Acc Results[1];
++	static char GpuText[1][8192] {};
++	static std::uint8_t DefaultLightingPercent = 100;
++#	if defined(WITH_RHI_GX2)
++	static void GpuReset() { ::WiiUGpuReset(); }
++	static void GpuClearNames() { ::WiiUGpuClearNames(); }
++	static void GpuFormat(std::int32_t i) { ::WiiUGpuFormat(GpuText[i], sizeof(GpuText[i])); }
++#	else
++	static void GpuReset() {}
++	static void GpuClearNames() {}
++	static void GpuFormat(std::int32_t i) { GpuText[i][0] = '\0'; }
++#	endif
++	static char Out[131072]; static std::size_t OutLength = 0;
++	static String OutPath; static bool DefaultZoomOut = true;
++
++	static void Append(const char* fmt, ...) {
++		va_list args; va_start(args, fmt);
++		int n = std::vsnprintf(Out + OutLength, sizeof(Out) - OutLength, fmt, args);
++		va_end(args);
++		if (n > 0) OutLength = std::min(OutLength + std::size_t(n), sizeof(Out) - 1);
++	}
++	static void Flush() {
++		auto s = fs::Open(OutPath, FileAccess::Write);
++		if (s->IsValid()) s->Write(Out, std::int64_t(OutLength));
++	}
++
++	static bool Load(StringView dir) {
++		// Each build has its own test list ("bench-tests-mem1.txt", "bench-tests-mem2.txt"), else "bench.txt"
++		char listName[32]; std::snprintf(listName, sizeof(listName), "bench-tests-%s.txt", Variant);
++		auto s = fs::Open(fs::CombinePath(dir, StringView(listName)), FileAccess::Read);
++		if (!s->IsValid()) s = fs::Open(fs::CombinePath(dir, "bench.txt"_s), FileAccess::Read);
++		if (!s->IsValid()) return false;
++		static char buf[8192] {};
++		std::int64_t n = s->Read(buf, sizeof(buf) - 1);
++		buf[n > 0 ? n : 0] = '\0';
++		char* line = buf;
++		while (line != nullptr && *line != '\0' && TestCount < std::int32_t(arraySize(Tests))) {
++			char* next = std::strchr(line, '\n');
++			if (next != nullptr) *next++ = '\0';
++			float warmup, measure;
++			if (std::sscanf(line, "#seconds %f %f", &warmup, &measure) == 2 && warmup > 0.0f && measure > 0.0f) {
++				WarmupSeconds = warmup; MeasureSeconds = measure;
++			}
++			if (std::strncmp(line, "#still", 6) == 0) BenchStill = true;
++			Test t {}; std::int32_t noZoomOut = 0; char variant[8] = "A";
++			if (line[0] != '#' && std::sscanf(line, "%47s %d %d %d %7s", t.Level, &t.Rescale, &t.Players, &noZoomOut, variant) >= 1) {
++				if (t.Players < 1 || t.Players > 4) t.Players = 1;
++				t.NoZoomOut = (noZoomOut != 0);
++				t.VariantIndex = -1;
++				for (std::int32_t i = 0; i < std::int32_t(arraySize(Variants)); i++) {
++					if (std::strcmp(Variants[i].Name, variant) == 0) { t.VariantIndex = i; break; }
++				}
++				if (t.VariantIndex < 0) {
++					LOGW("WIIU_BENCH: unknown variant \"{}\", skipping \"{}\"", variant, t.Level);
++				} else {
++					Tests[TestCount++] = t;
++				}
++			}
++			line = next;
++		}
++		char name[32]; std::snprintf(name, sizeof(name), "bench-%s.txt", Variant);
++		OutPath = fs::CombinePath(dir, StringView(name));
++		DefaultZoomOut = PreferencesCache::PreferZoomOut;
++		DefaultLightingPercent = PreferencesCache::LightingResolutionPercent;
++		WiiUBenchSavedRescale = std::uint8_t(PreferencesCache::ActiveRescaleMode);
++		WiiUBenchSavedZoomOut = DefaultZoomOut;
++		WiiUBenchSavedLighting = DefaultLightingPercent;
++		Append("# Jazz2 Wii U GX2 benchmark, build %s (tile-layer window cache on, GPU timers, variants), %d tests\n", Variant, TestCount);
++		Append("# level rescale players zoomOut variant | frames avgMs maxMs >20.8ms >33.4ms | phases ms: update postUpdate visit draw endFrame present wait | drawCalls commands | ringWaits retireFinishes | counters ms\n# gpu rows: ms per frame, draws per frame, viewport (\"cont\" = the rest of a viewport after one drawn inside it)\n");
++		Flush();
++		return (TestCount > 0);
++	}
++
++	static void StartTest(IRootController* root) {
++		const Test& t = Tests[Current];
++		WiiUBenchPrefsOverridden = true;
++		PreferencesCache::ActiveRescaleMode = (RescaleMode)t.Rescale;
++		PreferencesCache::PreferZoomOut = (t.NoZoomOut ? false : DefaultZoomOut);
++		const VariantInfo& v = Variants[t.VariantIndex];
++		WiiUBenchFlags = v.Flags;
++		PreferencesCache::LightingResolutionPercent = (v.LightingPercent != 0 ? v.LightingPercent : DefaultLightingPercent);
++		WiiUBenchFrame = 0;
++		GpuClearNames();
++		WiiUTestHookWalk = !BenchStill;
++		LOGI("WIIU_BENCH: test {}/{}: \"{}\" rescale {} players {} variant {}", Current + 1, TestCount, t.Level, t.Rescale, t.Players, v.Name);
++		PlayerType players[4] = { PlayerType::Jazz, PlayerType::Spaz, PlayerType::Jazz, PlayerType::Spaz };
++		LevelInitialization levelInit(StringView(t.Level), GameDifficulty::Normal, PreferencesCache::EnableReforgedGameplay, false, arrayView(players, t.Players));
++#	if defined(WITH_MULTIPLAYER)
++		if (t.Players > 1) {
++			levelInit.LocalMultiplayerGameMode = (std::uint8_t)MpGameMode::Cooperation;
++		}
++#	endif
++		root->ChangeLevel(Death::move(levelInit));
++		CurrentState = State::Warmup;
++		PhaseStart = TimeStamp::Now();
++	}
++
++	static void WriteResults() {
++		const Test& t = Tests[Current];
++		for (std::int32_t i = 0; i < 1; i++) {
++			const Acc& a = Results[i];
++			const double sf = (a.SnapFrames > 0.0 ? a.SnapFrames : 1.0);
++			Append("%-18s %d %d %d %-3s | %u %.2f %.1f %u %u |", t.Level, t.Rescale, t.Players, t.NoZoomOut ? 0 : (DefaultZoomOut ? 1 : 0),
++				Variants[t.VariantIndex].Name, a.Frames, a.Frames > 0 ? a.Sum * 1000.0 / a.Frames : 0.0, a.Max * 1000.0f, a.Slow, a.VerySlow);
++			const FrameStatistics::Phase phases[] = { FrameStatistics::Phase::Update, FrameStatistics::Phase::PostUpdate, FrameStatistics::Phase::Visit,
++				FrameStatistics::Phase::Draw, FrameStatistics::Phase::EndFrame, FrameStatistics::Phase::Present, FrameStatistics::Phase::Wait };
++			for (auto p : phases) Append(" %.2f", a.Phases[(std::size_t)p] / sf);
++			Append(" | %.0f %.0f | %u %u |", a.DrawCalls / sf, a.Commands / sf, (unsigned)WiiUBenchRingWaits, (unsigned)WiiUBenchRetireFinishes);
++			for (std::uint32_t c = 0; c < a.CounterCount; c++) Append(" %s=%.2f", a.CounterNames[c], a.CounterSums[c] / sf);
++			Append("\n");
++			Append("%s", GpuText[i]);
++		}
++		Flush();
++	}
++
++	static void Accumulate(Acc& a, float phaseElapsed) {
++		const float frameTime = theApplication().GetFrameTimer().GetLastFrameDuration();
++		a.Frames++; a.Sum += frameTime; a.Max = std::max(a.Max, frameTime);
++		if (frameTime > 0.0208f) a.Slow++;
++		if (frameTime > 0.0334f) a.VerySlow++;
++
++		const auto& snap = FrameStatistics::GetSnapshot();
++		if (snap.Sequence != LastSequence) {
++			LastSequence = snap.Sequence;
++			if (phaseElapsed >= SkipSnapshotSeconds && snap.FrameCount > 0) {
++				const double w = snap.FrameCount;
++				a.SnapFrames += w;
++				for (std::size_t i = 0; i < (std::size_t)FrameStatistics::Phase::Count; i++) a.Phases[i] += snap.PhaseTimes[i] * w;
++				a.DrawCalls += snap.DrawCalls * w; a.Commands += snap.RenderCommands * w;
++				for (std::uint32_t c = 0; c < snap.CounterCount; c++) {
++					std::uint32_t j = 0;
++					while (j < a.CounterCount && std::strcmp(a.CounterNames[j], snap.Counters[c].Name) != 0) j++;
++					if (j == a.CounterCount) {
++						if (j >= FrameStatistics::MaxCounters) continue;
++						a.CounterNames[j] = snap.Counters[c].Name; a.CounterSums[j] = 0.0; a.CounterCount++;
++					}
++					// Counter values average the frames that reported them; weighting by all frames keeps it per frame
++					a.CounterSums[j] += snap.Counters[c].Value * w;
++				}
++			}
++		}
++	}
++
++	static void Step(IRootController* root) {
++		if (CurrentState == State::Idle || CurrentState == State::Finished) return;
++		FrameStatistics::SetEnabled(true);
++		const float elapsed = PhaseStart.GetSecondsSince();
++		switch (CurrentState) {
++			case State::Warmup:
++				if (elapsed >= WarmupSeconds) {
++					std::memset(Results, 0, sizeof(Results));
++					theApplication().GetRenderingSettings().BatchingEnabled = true;
++					GpuReset();
++					WiiUBenchFrame = 0; WiiUBenchRingWaits = 0; WiiUBenchRetireFinishes = 0;
++					CurrentState = State::Measure; PhaseStart = TimeStamp::Now();
++				}
++				break;
++			case State::Measure:
++				Accumulate(Results[0], elapsed);
++				if (elapsed >= MeasureSeconds) {
++					GpuFormat(0);
++					WriteResults();
++					if (++Current < TestCount) {
++						StartTest(root);
++					} else {
++						Append("# done\n"); Flush();
++						LOGI("WIIU_BENCH: done, results in \"{}\"", OutPath);
++						CurrentState = State::Finished;
++						WiiUTestHookWalk = false;
++						WiiUBenchFlags = 0;
++						PreferencesCache::PreferZoomOut = DefaultZoomOut;
++						PreferencesCache::LightingResolutionPercent = DefaultLightingPercent;
++						PreferencesCache::ActiveRescaleMode = (RescaleMode)WiiUBenchSavedRescale;
++						WiiUBenchPrefsOverridden = false;
++						root->ChangeLevel(LevelInitialization());
++					}
++				}
++				break;
++			default: break;
++		}
++	}
++}
++#endif
++
+ void GameEventHandler::OnInitialize()
+ {
+ 	ZoneScopedC(0x888888);
+@@ -654,6 +903,52 @@ void GameEventHandler::OnInitialize()
+ 	}
+ #	endif
+ 
++#	if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit)
++	{
++		String benchDir = fs::GetDirectoryName(ContentResolver::Get().GetSourcePath());
++		if (WiiUBench::Load(benchDir)) {
++			LOGI("WIIU_BENCH: {} tests, writing \"{}\"", WiiUBench::TestCount, WiiUBench::OutPath);
++			WaitForVerify();
++			WiiUBench::Current = 0;
++			WiiUBench::StartTest(this);
++			return;
++		}
++
++		String autoPath = fs::CombinePath(fs::GetDirectoryName(ContentResolver::Get().GetSourcePath()), "autolevel.txt"_s);
++		auto s = fs::Open(autoPath, FileAccess::Read);
++		if (s->IsValid()) {
++			char buf[64] {}; s->Read(buf, sizeof(buf) - 1);
++			// Format: "<level> [rescale] [players] [walk] [noZoomOut]"
++			String levelName = StringView(buf).trimmed();
++			std::int32_t args[4] {}; std::int32_t argCount = 0;
++			if (auto sp = levelName.find(' ')) {
++				const char* p = sp.end();
++				while (argCount < 4 && *p != '\0') {
++					char* end; long v = std::strtol(p, &end, 10);
++					if (end == p) break;
++					args[argCount++] = std::int32_t(v); p = end;
++				}
++				levelName = levelName.prefix(sp.begin());
++			}
++			PreferencesCache::ActiveRescaleMode = (RescaleMode)args[0];
++			std::int32_t playerCount = (args[1] >= 1 && args[1] <= 4 ? args[1] : 1);
++			extern bool WiiUTestHookWalk; WiiUTestHookWalk = (args[2] != 0);
++			if (args[3] != 0) PreferencesCache::PreferZoomOut = false;
++			LOGI("WIIU_TEST_HOOK: starting level \"{}\" rescale {} players {} walk {}", levelName, args[0], playerCount, args[2]);
++			PlayerType players[4] = { PlayerType::Jazz, PlayerType::Spaz, PlayerType::Jazz, PlayerType::Spaz }; // No Lori: the test data has no TSF files
++			LevelInitialization levelInit(levelName, GameDifficulty::Normal, PreferencesCache::EnableReforgedGameplay, false, arrayView(players, playerCount));
++#		if defined(WITH_MULTIPLAYER)
++			if (playerCount > 1) {
++				levelInit.LocalMultiplayerGameMode = (std::uint8_t)MpGameMode::Cooperation;
++			}
++#		endif
++			WaitForVerify();
++			ChangeLevel(Death::move(levelInit));
++			return;
++		}
++	}
++#	endif
++
+ #	if defined(WITH_THREADS) && !defined(DEATH_TARGET_EMSCRIPTEN)
+ 	SetStateHandler(std::make_shared<Cinematics>(this, "intro"_s, [](IRootController* root, bool endOfStream) mutable {
+ 		if ((root->GetFlags() & Flags::IsVerified) == Flags::IsVerified) {
+@@ -748,6 +1043,10 @@ void GameEventHandler::OnBeginFrame()
+ 	if (_currentHandler != nullptr) {
+ 		_currentHandler->OnBeginFrame();
+ 	}
++
++#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit)
++	WiiUBench::Step(this);
++#endif
+ }
+ 
+ void GameEventHandler::OnPostUpdate()
+diff --git a/Sources/WiiUBench.h b/Sources/WiiUBench.h
+new file mode 100644
+index 00000000..1b06e295
+--- /dev/null
++++ b/Sources/WiiUBench.h
+@@ -0,0 +1,34 @@
++#pragma once
++
++// WIIU_TEST_HOOK (local only, do not commit): switches for the console benchmark variants (Docs/WiiU-GX2-Plan.md,
++// "Next console benchmark: variants"). Main.cpp sets them per test from the variant column of bench.txt; every
++// switch is off outside the benchmark, so the game behaves as without the patch.
++
++#include <cstdint>
++
++namespace WiiUBenchFlag
++{
++	enum : std::uint32_t {
++		SplitPresent = 1u << 0,		// B1: submit the draws, wait for the previous flip, then copy, swap and submit again
++		WaitBeforeCopy = 1u << 1,	// B2: wait for the previous flip before the scan copies, one submit per frame
++		FlushOnTarget = 1u << 2,	// B3: submit at every render-target switch that had draws
++		DirectResolve = 1u << 3,	// C: no antialiasing subpass for supersampling alone, bicubic screen pass instead
++		LinearResolve = 1u << 4,	// D: as C, with a linear screen pass
++		NoSupersample = 1u << 5,	// E: Supersample = 1 with Zoom out
++		DrcOnce = 1u << 6,			// G: GamePad copy only in the first two frames of a measurement
++		DrcEveryOther = 1u << 7,	// G2: GamePad copy in two frames of every four
++	};
++}
++
++/** @brief Active variant switches (`WiiUBenchFlag`) */
++extern std::uint32_t WiiUBenchFlags;
++/** @brief Frames presented since the measurement started (the GamePad variants count from it) */
++extern std::uint32_t WiiUBenchFrame;
++/** @brief Times the uniform ring had to wait for the GPU / `RetireBlock()` fell back to `Finish()` */
++extern std::uint32_t WiiUBenchRingWaits, WiiUBenchRetireFinishes;
++/** @brief Set around the creation of the targets the MEM1 build puts in MEM1 (`WIIU_TEST_MEM1`) */
++extern bool WiiUBenchMem1Hint;
++/** @brief While the benchmark overrides preferences: the owner's own values, which `PreferencesCache::Save()` writes instead */
++extern bool WiiUBenchPrefsOverridden;
++extern std::uint8_t WiiUBenchSavedRescale, WiiUBenchSavedLighting;
++extern bool WiiUBenchSavedZoomOut;
+diff --git a/Sources/nCine/Graphics/RHI/GX2/Gx2Device.cpp b/Sources/nCine/Graphics/RHI/GX2/Gx2Device.cpp
+index 0161ff38..37fc0862 100644
+--- a/Sources/nCine/Graphics/RHI/GX2/Gx2Device.cpp
++++ b/Sources/nCine/Graphics/RHI/GX2/Gx2Device.cpp
+@@ -10,6 +10,9 @@
+ 
+ #include <cstring>
+ #include <malloc.h>
++#include "../../../Base/FrameStatistics.h" // WIIU_TEST_HOOK (local only, do not commit)
++#include "../../../../WiiUBench.h" // WIIU_TEST_HOOK (local only, do not commit)
++#include <algorithm> // WIIU_TEST_HOOK (local only, do not commit)
+ 
+ #include <coreinit/thread.h>
+ #include <coreinit/time.h>
+@@ -23,6 +26,185 @@
+ #include <gx2/state.h>
+ #include <gx2/swap.h>
+ 
++// WIIU_TEST_HOOK (local only, do not commit): GPU timers. Every viewport drawn and the scan-buffer copies sample
++// the GPU clock at the bottom of the pipe (when all earlier work has finished); the stamps are read three frames
++// later, when the GPU is done with them. A segment's time is from its stamp to the next one. Cemu writes an
++// invalid value for every sample, so only a console gives numbers.
++#include <coreinit/cache.h>
++#include <cstdio>
++extern "C" void GX2SampleBottomGPUCycle(std::uint64_t* cycle);
++extern "C" std::uint64_t GX2GPUTimeToCPUTime(std::uint64_t time);
++
++namespace WiiUGpuProf
++{
++	static constexpr std::int32_t MaxMarks = 96, Sets = 4, MaxNames = 96, LabelSize = 32;
++	struct Mark { char Label[LabelSize]; std::uint32_t Draws; };
++	struct Name { const void* Key; char Text[20]; };
++	struct Acc { char Label[LabelSize]; double Us; double Draws; std::uint32_t Frames; };
++
++	static std::uint64_t* Stamps = nullptr;
++	static Mark Marks[Sets][MaxMarks];
++	static std::int32_t Counts[Sets];
++	static std::uint32_t Frame = 0;
++	static std::uint32_t Draws = 0;
++	static Name Names[MaxNames]; static std::int32_t NameCount = 0;
++	static Acc Accs[MaxMarks]; static std::int32_t AccCount = 0;
++	static std::uint32_t GoodFrames = 0, PendingFrames = 0, InvalidFrames = 0;
++	static double FrameUs = 0.0, PeriodUs = 0.0, PeriodRaw = 0.0; static std::uint32_t PeriodCount = 0;
++	static std::uint64_t LastStart = 0;
++	struct Active { const void* Key; std::int32_t W, H; bool Screen; };
++	static Active Stack[16]; static std::int32_t Depth = 0;
++
++	static void BeginSet() {
++		if (Stamps == nullptr) {
++			Stamps = static_cast<std::uint64_t*>(memalign(256, sizeof(std::uint64_t) * Sets * MaxMarks));
++			std::memset(Stamps, 0, sizeof(std::uint64_t) * Sets * MaxMarks);
++			DCFlushRange(Stamps, sizeof(std::uint64_t) * Sets * MaxMarks);
++		}
++		const std::int32_t set = std::int32_t(Frame % Sets);
++		std::uint64_t* s = Stamps + set * MaxMarks;
++		std::memset(s, 0, sizeof(std::uint64_t) * MaxMarks);
++		DCFlushRange(s, sizeof(std::uint64_t) * MaxMarks);
++		Counts[set] = 0;
++		Draws = 0;
++	}
++
++	static void Sample(const char* label) {
++		if (Stamps == nullptr) BeginSet();
++		const std::int32_t set = std::int32_t(Frame % Sets);
++		std::int32_t& n = Counts[set];
++		if (n >= MaxMarks) return;
++		if (n > 0) Marks[set][n - 1].Draws = Draws;
++		Draws = 0;
++		// Same label twice in one frame (e.g. several players): number them so each keeps its own row
++		char text[LabelSize]; std::snprintf(text, sizeof(text), "%s", label);
++		std::int32_t dup = 1;
++		for (std::int32_t i = 0; i < n; i++) {
++			if (std::strncmp(Marks[set][i].Label, label, std::strlen(label)) == 0 &&
++				(Marks[set][i].Label[std::strlen(label)] == '\0' || Marks[set][i].Label[std::strlen(label)] == '#')) dup++;
++		}
++		if (dup > 1) std::snprintf(text, sizeof(text), "%s#%d", label, (int)dup);
++		std::memcpy(Marks[set][n].Label, text, LabelSize);
++		Marks[set][n].Draws = 0;
++		GX2SampleBottomGPUCycle(Stamps + set * MaxMarks + n);
++		n++;
++	}
++
++	static void Process(std::int32_t set) {
++		const std::int32_t n = Counts[set];
++		if (n < 2) return;
++		std::uint64_t* s = Stamps + set * MaxMarks;
++		DCInvalidateRange(s, sizeof(std::uint64_t) * MaxMarks);
++		for (std::int32_t i = 0; i < n; i++) {
++			if (s[i] == 0) { PendingFrames++; return; }
++			if (s[i] == ~std::uint64_t(0)) { InvalidFrames++; return; }
++		}
++		GoodFrames++;
++		for (std::int32_t i = 0; i + 1 < n; i++) {
++			const double us = double(OSTicksToMicroseconds(GX2GPUTimeToCPUTime(s[i + 1]) - GX2GPUTimeToCPUTime(s[i])));
++			std::int32_t j = 0;
++			while (j < AccCount && std::strcmp(Accs[j].Label, Marks[set][i].Label) != 0) j++;
++			if (j == AccCount) {
++				if (AccCount >= MaxMarks) continue;
++				std::memcpy(Accs[j].Label, Marks[set][i].Label, LabelSize); Accs[j].Us = 0.0; Accs[j].Draws = 0.0; Accs[j].Frames = 0; AccCount++;
++			}
++			Accs[j].Us += us; Accs[j].Draws += Marks[set][i].Draws; Accs[j].Frames++;
++		}
++		FrameUs += double(OSTicksToMicroseconds(GX2GPUTimeToCPUTime(s[n - 1]) - GX2GPUTimeToCPUTime(s[0])));
++		// Start-to-start period of consecutive frames, in raw GPU cycles and converted, to check the conversion
++		if (LastStart != 0 && s[0] > LastStart) {
++			PeriodRaw += double(s[0] - LastStart);
++			PeriodUs += double(OSTicksToMicroseconds(GX2GPUTimeToCPUTime(s[0]) - GX2GPUTimeToCPUTime(LastStart)));
++			PeriodCount++;
++		}
++		LastStart = s[0];
++	}
++
++	// Called once per frame after the flip wait; the frame Sets-1 back is long retired by then
++	static void EndFrame() {
++		Frame++;
++		if (Frame >= Sets) Process(std::int32_t((Frame - (Sets - 1)) % Sets));
++		BeginSet();
++		Depth = 0;
++		Sample("start");
++	}
++}
++
++void WiiUGpuName(const void* key, const char* name)
++{
++	for (std::int32_t i = 0; i < WiiUGpuProf::NameCount; i++) {
++		if (WiiUGpuProf::Names[i].Key == key) { std::snprintf(WiiUGpuProf::Names[i].Text, sizeof(WiiUGpuProf::Names[i].Text), "%s", name); return; }
++	}
++	if (WiiUGpuProf::NameCount < WiiUGpuProf::MaxNames) {
++		auto& e = WiiUGpuProf::Names[WiiUGpuProf::NameCount++];
++		e.Key = key; std::snprintf(e.Text, sizeof(e.Text), "%s", name);
++	}
++}
++
++// begin: a viewport starts drawing. Viewports nest (a viewport without a texture and the split passes are drawn
++// inside another one), so when one finishes, what follows is labelled as the rest of the one it was drawn in.
++namespace WiiUGpuProf
++{
++	static void Label(char* out, const Active& a, const char* suffix) {
++		const char* name = (a.Screen ? "screen" : "unnamed");
++		for (std::int32_t i = 0; i < NameCount; i++) {
++			if (Names[i].Key == a.Key) { name = Names[i].Text; break; }
++		}
++		std::snprintf(out, LabelSize, "%s %dx%d%s", name, (int)a.W, (int)a.H, suffix);
++	}
++}
++
++void WiiUGpuMark(const void* key, std::int32_t width, std::int32_t height, bool screen, bool begin)
++{
++	using namespace WiiUGpuProf;
++	char label[LabelSize];
++	if (begin) {
++		const Active a = { key, width, height, screen };
++		if (Depth < 16) Stack[Depth] = a;
++		Depth++;
++		Label(label, a, "");
++	} else {
++		if (Depth > 0) Depth--;
++		if (Depth > 0 && Depth <= 16) Label(label, Stack[Depth - 1], " cont");
++		else std::snprintf(label, sizeof(label), "between viewports");
++	}
++	Sample(label);
++}
++
++void WiiUGpuClearNames()
++{
++	WiiUGpuProf::NameCount = 0;
++}
++
++void WiiUGpuReset()
++{
++	WiiUGpuProf::AccCount = 0; WiiUGpuProf::GoodFrames = WiiUGpuProf::PendingFrames = WiiUGpuProf::InvalidFrames = 0;
++	WiiUGpuProf::FrameUs = WiiUGpuProf::PeriodUs = WiiUGpuProf::PeriodRaw = 0.0; WiiUGpuProf::PeriodCount = 0;
++}
++
++// Rows: "  gpu <ms per frame> <draws per frame> <label>", segments under 0.05 ms and with no draws left out
++std::size_t WiiUGpuFormat(char* out, std::size_t size)
++{
++	using namespace WiiUGpuProf;
++	std::size_t len = 0;
++	auto put = [&](const char* fmt, auto... args) {
++		if (len >= size) return;
++		int r = std::snprintf(out + len, size - len, fmt, args...);
++		if (r > 0) len = std::min(len + std::size_t(r), size - 1);
++	};
++	const double f = (GoodFrames > 0 ? double(GoodFrames) : 1.0);
++	put("  gpu frames %u good, %u pending, %u invalid | start-to-end %.2f ms | period %.2f ms = %.0f cycles\n",
++		(unsigned)GoodFrames, (unsigned)PendingFrames, (unsigned)InvalidFrames, FrameUs / f / 1000.0,
++		PeriodCount > 0 ? PeriodUs / PeriodCount / 1000.0 : 0.0, PeriodCount > 0 ? PeriodRaw / PeriodCount : 0.0);
++	for (std::int32_t i = 0; i < AccCount; i++) {
++		const double ms = Accs[i].Us / f / 1000.0, draws = Accs[i].Draws / f;
++		if (ms < 0.05 && draws < 0.5) continue;
++		put("  gpu %7.2f %6.1f %s\n", ms, draws, Accs[i].Label);
++	}
++	return len;
++}
++// end WIIU_TEST_HOOK
++
+ namespace nCine::RHI::GX2
+ {
+ 	namespace
+@@ -102,6 +284,7 @@ namespace nCine::RHI::GX2
+ 	bool Gx2Device::_inForeground = true;
+ 	bool Gx2Device::_vsync = true;
+ 	bool Gx2Device::_firstFrame = true;
++	std::uint32_t Gx2Device::_benchBatchesThisFrame = 0; // WIIU_TEST_HOOK (local only, do not commit)
+ 	std::uint32_t Gx2Device::_swapToken = 0;
+ 	std::uint32_t Gx2Device::_frameCounter = 0;
+ 	bool Gx2Device::_targetDirty = true;
+@@ -354,6 +537,7 @@ namespace nCine::RHI::GX2
+ 		}
+ 
+ 		// Out of slots: wait for the GPU, after which every retired block is safe to release
++		WiiUBenchRetireFinishes++; // WIIU_TEST_HOOK (local only, do not commit)
+ 		Finish();
+ 		ReleaseRetiredBlocks(true);
+ 		_retiredBlocks[0].Block = block;
+@@ -732,6 +916,7 @@ namespace nCine::RHI::GX2
+ 		// submitted stamp still covers everything recorded before it
+ 		GX2Flush();
+ 		_batchStamps[_openBatch % BatchStampCount] = GX2GetLastSubmittedTimeStamp();
++		_benchBatchesThisFrame++; // WIIU_TEST_HOOK (local only, do not commit)
+ 		_openBatch++;
+ 		if (_openBatch == 0) {
+ 			_openBatch = 1;
+@@ -773,7 +958,10 @@ namespace nCine::RHI::GX2
+ 			return true;
+ 		}
+ 		// Sleeps on GX2's timestamp event; it gives up (and returns false) only on a GPU timeout
+-		return (GX2WaitTimeStamp(stamp) != FALSE);
++		const TimeStamp waitStart = TimeStamp::Now(); // WIIU_TEST_HOOK (local only, do not commit)
++		const bool waited = (GX2WaitTimeStamp(stamp) != FALSE);
++		FrameStatistics::AddCounter("gpuWait", waitStart.GetMillisecondsSince(), FrameStatistics::Unit::Milliseconds);
++		return waited;
+ 	}
+ 
+ 	FenceHandle Gx2Device::InsertFence()
+@@ -817,13 +1005,19 @@ namespace nCine::RHI::GX2
+ 		// four players with Zoom out from 20 to 32 fps (MEM2 targets) and four players without it from 51 to 60 fps.
+ 		FlushBatch();
+ 		if (!_firstFrame) {
++			const TimeStamp flipStart = TimeStamp::Now(); // WIIU_TEST_HOOK (local only, do not commit)
+ 			WaitForPreviousFlip();
++			FrameStatistics::AddCounter("flipWait", flipStart.GetMillisecondsSince(), FrameStatistics::Unit::Milliseconds);
+ 		}
++		WiiUBenchFrame++; // WIIU_TEST_HOOK (local only, do not commit)
+ 
+ 		// The copy scales the screen buffer to each scan buffer's own resolution (the TV mode SDL picked, and
+ 		// 854x480 on the GamePad)
++		WiiUGpuProf::Sample("scanCopyTV"); // WIIU_TEST_HOOK (local only, do not commit)
+ 		GX2CopyColorBufferToScanBuffer(&_screenBuffer, GX2_SCAN_TARGET_TV);
++		WiiUGpuProf::Sample("scanCopyDRC"); // WIIU_TEST_HOOK (local only, do not commit)
+ 		GX2CopyColorBufferToScanBuffer(&_screenBuffer, GX2_SCAN_TARGET_DRC);
++		WiiUGpuProf::Sample("end"); // WIIU_TEST_HOOK (local only, do not commit)
+ 		// The copies clobber the pipeline state like a clear does
+ 		RestoreContextState();
+ 		GX2SwapScanBuffers();
+@@ -831,6 +1025,8 @@ namespace nCine::RHI::GX2
+ 		// this one still reads by the tokens (see the class documentation)
+ 		_swapToken = _openBatch;
+ 		FlushBatch();
++		FrameStatistics::AddCounter("batches", float(_benchBatchesThisFrame), FrameStatistics::Unit::Number); // WIIU_TEST_HOOK
++		_benchBatchesThisFrame = 0;
+ 
+ 		if (_firstFrame) {
+ 			// The scan-out is turned on only once there is a frame of ours in the scan buffers
+@@ -843,6 +1039,7 @@ namespace nCine::RHI::GX2
+ 		// CPU at most about one frame ahead of the scan-out
+ 
+ 		_frameCounter++;
++		WiiUGpuProf::EndFrame(); // WIIU_TEST_HOOK (local only, do not commit)
+ 		ReleaseRetiredBlocks();
+ 		InvalidateTarget();
+ 	}
+@@ -886,6 +1083,7 @@ namespace nCine::RHI::GX2
+ 			if (!IsUseRetired(token)) {
+ 				// The ring has come round to a chunk the GPU may still be reading: the CPU is far ahead, or one
+ 				// frame needs more than the whole ring. Not an error, but worth knowing when it happens often.
++				WiiUBenchRingWaits++; // WIIU_TEST_HOOK (local only, do not commit)
+ 				static std::uint32_t waits = 0;
+ 				if ((waits++ % 600) == 0) {
+ 					LOGW("The uniform ring caught up with the GPU, waiting ({} times so far)", waits);
+@@ -1010,6 +1208,7 @@ namespace nCine::RHI::GX2
+ 		ApplyAttributeBuffers(*program);
+ 
+ 		const GX2PrimitiveMode mode = TranslatePrimitive(primitive);
++		WiiUGpuProf::Draws++; // WIIU_TEST_HOOK (local only, do not commit)
+ 		const std::uint32_t instances = std::uint32_t(numInstances > 0 ? numInstances : 1);
+ 		if (indexed) {
+ 			const Gx2BufferObject* ibo = program->GetVertexFormat().GetIbo();
+diff --git a/Sources/nCine/Graphics/RHI/GX2/Gx2Device.h b/Sources/nCine/Graphics/RHI/GX2/Gx2Device.h
+index bb384d1d..5c8f8c34 100644
+--- a/Sources/nCine/Graphics/RHI/GX2/Gx2Device.h
++++ b/Sources/nCine/Graphics/RHI/GX2/Gx2Device.h
+@@ -306,6 +306,7 @@ namespace nCine::RHI::GX2
+ 		static bool _firstFrame;
+ 		/** @brief Token of the batch that carried the last `GX2SwapScanBuffers()`, 0 if none */
+ 		static std::uint32_t _swapToken;
++		static std::uint32_t _benchBatchesThisFrame; // WIIU_TEST_HOOK (local only, do not commit)
+ 		static std::uint32_t _frameCounter;
+ 		/** @brief Set whenever the colour buffer, viewport or scissor may have changed since the last draw */
+ 		static bool _targetDirty;
+diff --git a/Sources/nCine/Graphics/Viewport.cpp b/Sources/nCine/Graphics/Viewport.cpp
+index 8ce886bc..3a5e0c08 100644
+--- a/Sources/nCine/Graphics/Viewport.cpp
++++ b/Sources/nCine/Graphics/Viewport.cpp
+@@ -12,6 +12,10 @@
+ #include "../tracy.h"
+ #include "../../Main.h"
+ 
++#if defined(WITH_RHI_GX2) // WIIU_TEST_HOOK (local only, do not commit)
++void WiiUGpuMark(const void* key, std::int32_t width, std::int32_t height, bool screen, bool begin);
++#endif
++
+ #if defined(WITH_QT5)
+ #	include "Qt5GfxDevice.h"
+ #endif
+@@ -412,9 +416,23 @@ namespace nCine
+ 		DrawContents(nextViewport, nextIndex);
+ 	}
+ 
++#if defined(WITH_RHI_GX2) // WIIU_TEST_HOOK (local only, do not commit)
++	struct WiiUGpuScope {
++		const Viewport* V;
++		WiiUGpuScope(const Viewport* v) : V(v) { Mark(true); }
++		~WiiUGpuScope() { Mark(false); }
++		void Mark(bool begin) {
++			WiiUGpuMark(V, V->GetWidth(), V->GetHeight(), V->GetType() == Viewport::Type::Screen, begin);
++		}
++	};
++#endif
++
+ 	void Viewport::DrawContents(Viewport* nextViewport, std::uint32_t nextIndex)
+ 	{
+ 		ZoneScopedC(0x81A861);
++#if defined(WITH_RHI_GX2) // WIIU_TEST_HOOK (local only, do not commit)
++		WiiUGpuScope wiiuGpuScope(this);
++#endif
+ #if defined(DEATH_DEBUG)
+ 		// TODO: RHI::Debug
+ 		/*char debugString[128];

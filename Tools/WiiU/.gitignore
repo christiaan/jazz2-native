@@ -1,0 +1,6 @@
+spikes/*/build/
+spikes/*/*.png
+spikes/*/cemu_stdout.txt
+spikes/cafeglsl/t/
+spikes/cafeglsl/rel/
+spikes/cafeglsl/dump
