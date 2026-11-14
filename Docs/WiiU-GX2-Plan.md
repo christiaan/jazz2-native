@@ -474,10 +474,66 @@ Conclusions:
 - **Four players are GPU-bound.** The CPU needs 6-15 ms but frames take 50 ms. One player at 1080p
   fits in a frame, so raw fill rate is not the limit; the likely cost is the per-viewport passes (lighting,
   blur, combine), possibly with Zoom out enlarging each viewport's view. Finding out needs GPU timings
-  (`GX2SampleBottomGPUCycle()` around the passes).
+  (`GX2SampleBottomGPUCycle()` around the passes). The GPU timers below found a different cause: the CPU and
+  the GPU never overlap.
 - **3xBRZ, SABR and CleanEdge are too slow at 1080p**, CleanEdge unplayably so. Options: hide them on GX2
   (as `RHI_CAP_HEAVY_RESCALE_SHADERS` does for other backends, though 3xBRZ is not under that flag), or run
   the rescale pass at 720p on the Wii U.
+
+### GPU timers (console, 2026-11-14)
+
+The GPU-timer package (see Testing) ran on the console: `~/jazz2-wiiu-test/console-bench/gpu/bench-gpu.txt`,
+log `Jazz2-bench-gpu.log`. Every frame of every test was read back (`good`, none `invalid`), the
+start-to-start period matches the CPU frame time to 0.01 ms, and the rows of each test add up to its
+start-to-end time, so the numbers hold together. The whole frame is one `GX2Flush()` in `PresentFrame()`,
+so the GPU starts only once the CPU has recorded everything and the rows are pure GPU time.
+
+| Test (Zoom out on unless noted) | CPU ms | GPU ms | CPU + GPU | frame ms |
+|---|---|---|---|---|
+| `prince/castle1`, 1 player | 0.7 | 9.8 | 10.5 | 16.7 |
+| `prince/castle1`, 2 players | 3.3 | 10.0 | 13.3 | 16.8 |
+| `prince/castle1`, 3 players | 7.2 | 29.4 | 36.6 | 50.0 |
+| `prince/castle1`, 4 players | 6.7 | 32.5 | 39.2 | 50.0 |
+| `prince/castle1`, 4 players, Zoom out off | 7.4 | 10.7 | 18.1 | 33.3 |
+| `rescue/beach2`, 4 players | 9.4 | 30.5 | 39.9 | 50.5 |
+| `prince/castle1`, 1 player, 3xBRZ | 0.9 | 37.7 | 38.6 | 50.1 |
+| `prince/castle1`, 1 player, CleanEdge | 0.8 | 108.6 | 109.4 | 116.8 |
+
+Findings:
+- **The CPU and the GPU run one after the other.** `GX2WaitForFlip()` at the end of `PresentFrame()` waits
+  for the frame just submitted, so the next frame's CPU work starts only after the GPU is done. Every frame
+  time above is CPU + GPU rounded up to the next vsync. Neither side alone is over budget in the 4-player
+  Zoom-out-off test (7.4 and 10.7 ms) or, at 30 fps, in the 3- and 4-player Zoom-out tests (CPU 7-9 ms,
+  GPU 29-32.5 ms); only their sum is.
+- **Zoom out with 3+ players turns on a supersampled chain** (`UpscaleRenderPass`, `_supersample` 2): the
+  scene is composed at 1440x810 (3.6-5.0 ms), the antialiasing subpass scales it to 2880x1620 (6.0 ms,
+  since 1920/1440 is not an integer) and the screen pass resolves that to 1920x1080 (8.7 ms). That is
+  19.4 ms against 3.3 ms for compose plus screen with Zoom out off. The four viewports also cost 8.9 ms
+  instead of 3.3 (each is 720x406 instead of 360x203). 4-player budget: viewports 8.9, compose and
+  antialias 10.7, screen 8.7, scan copy 4.2.
+- **Output at 1080p has a fixed cost of about 6.7 ms**: the screen pass (2.5 ms with no rescaling) and the
+  copy to the TV and GamePad scan buffers (4.2 ms in every test). With one player that is 70% of the GPU
+  time.
+- **The cost follows pixels, not draws.** Batching off leaves the GPU time within 0.2 ms (the compose pass
+  goes from 19 to 195 draws for +0.2 ms). The full-screen passes reach only about 3 GB/s of writes, which
+  fits every target living in MEM2 (`Gx2Memory.h`).
+- **Rescale modes**: the screen pass alone takes 30.5 ms with 3xBRZ and 101 ms with CleanEdge.
+- Tooling: the patch's name table (96 entries) is never cleared, so after a few levels the rows say
+  `unnamed`; the sizes still identify each pass.
+
+What to do, by expected gain:
+1. **Let the CPU work on the next frame while the GPU draws** (the TODO at the `GX2WaitForFlip()` call):
+   wait for the flip of the frame before, using `GX2GetSwapStatus()`, instead of the one just swapped. The
+   tokens already keep the CPU off memory the GPU still reads. Expected: 4 players with Zoom out off from
+   30 to 60 fps, 3 and 4 players with Zoom out from 20 to 30 fps (4 players in `prince/castle1` with only
+   0.8 ms to spare), fewer missed frames with 2 players. Costs one frame of latency.
+2. **Cheaper supersampling on GX2**: skip the 2880x1620 antialiasing subpass and resolve 1440x810 to the
+   screen directly (about 12 ms less, some shimmer when the camera moves), or drop supersampling with
+   Zoom out on the Wii U.
+3. Split the scan copy into TV and GamePad timers to see which costs what; a 720p TV mode would cut both
+   the screen pass and the copy.
+4. Hide 3xBRZ, SABR and CleanEdge on GX2.
+5. Render targets in MEM1: probably faster, but wiiu-sdl2 owns MEM1 (see `Gx2Memory.h`).
 
 ## Backend contract (what to write)
 
