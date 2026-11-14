@@ -11,6 +11,14 @@
 #include <algorithm>
 #include <cmath>
 
+#if defined(WITH_RHI_GX2) // WIIU_TEST_HOOK (local only, do not commit)
+void WiiUGpuName(const void* key, const char* name);
+#	define WIIU_GPU_NAME(v, n) do { if ((v) != nullptr) ::WiiUGpuName((v), (n)); } while (false)
+#	include "../../WiiUBench.h"
+#else
+#	define WIIU_GPU_NAME(v, n) do { } while (false)
+#endif
+
 namespace Jazz2::Rendering
 {
 	namespace
@@ -206,6 +214,24 @@ namespace Jazz2::Rendering
 
 	void PlayerViewport::Register()
 	{
+		// WIIU_TEST_HOOK (local only, do not commit)
+		WIIU_GPU_NAME(_view.get(), "scene");
+#if defined(RHI_CAP_POSTPROCESSING)
+		WIIU_GPU_NAME(_lightingView.get(), "light");
+		WIIU_GPU_NAME(_downsamplePass.GetView(), "blurDown");
+		WIIU_GPU_NAME(_blurPass1.GetView(), "blur1");
+		WIIU_GPU_NAME(_blurPass2.GetView(), "blur2");
+		WIIU_GPU_NAME(_blurPass3.GetView(), "blur3");
+		WIIU_GPU_NAME(_blurPass4.GetView(), "blur4");
+		WIIU_GPU_NAME(_waterCopyPass.GetView(), "waterCopy");
+#endif
+#if defined(TILEMAP_LAYER_EFFECTS)
+		WIIU_GPU_NAME(_behindCopyPass.GetView(), "behindCopy");
+		WIIU_GPU_NAME(_behindDownsamplePass.GetView(), "behindDown");
+		WIIU_GPU_NAME(_behindBlurPass1.GetView(), "behindBlur1");
+		WIIU_GPU_NAME(_behindBlurPass2.GetView(), "behindBlur2");
+		WIIU_GPU_NAME(_xrayMaskView.get(), "xrayMask");
+#endif
 #if defined(RHI_CAP_POSTPROCESSING)
 		if (PreferencesCache::BlurEffects) {
 			// A pass the chain was shortened by (see Initialize()) is disposed and registers nothing

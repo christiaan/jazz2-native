@@ -10,6 +10,13 @@
 #include <algorithm>
 #include <cmath>
 
+#if defined(WITH_RHI_GX2) // WIIU_TEST_HOOK (local only, do not commit)
+void WiiUGpuName(const void* key, const char* name);
+#	define WIIU_GPU_NAME(v, n) do { if ((v) != nullptr) ::WiiUGpuName((v), (n)); } while (false)
+#else
+#	define WIIU_GPU_NAME(v, n) do { } while (false)
+#endif
+
 #if !defined(RHI_CAP_POSTPROCESSING)
 // The direct tier (no shaders or no framebuffers - the software backend today, fixed-function console
 // backends later) renders straight into the backend screen framebuffer, whose size the pass drives via
@@ -299,6 +306,7 @@ namespace Jazz2::Rendering
 
 	void UpscaleRenderPass::Register()
 	{
+		WIIU_GPU_NAME(_view.get(), "compose"); // WIIU_TEST_HOOK (local only, do not commit)
 		_antialiasing.Register();
 
 		Viewport::GetChain().push_back(_view.get());
@@ -348,6 +356,7 @@ namespace Jazz2::Rendering
 
 	void UpscaleRenderPass::AntialiasingSubpass::Register()
 	{
+		WIIU_GPU_NAME(_view.get(), "antialias"); // WIIU_TEST_HOOK (local only, do not commit)
 		if (_view != nullptr) {
 			Viewport::GetChain().push_back(_view.get());
 		}
@@ -439,6 +448,9 @@ namespace Jazz2::Rendering
 
 	void UpscaleRenderPassWithClipping::Register()
 	{
+		WIIU_GPU_NAME(_view.get(), "compose"); // WIIU_TEST_HOOK (local only, do not commit)
+		WIIU_GPU_NAME(_clippedView.get(), "clipped");
+		WIIU_GPU_NAME(_overlayView.get(), "overlay");
 		_antialiasing.Register();
 
 		auto& chain = Viewport::GetChain();

@@ -306,6 +306,7 @@ namespace nCine::RHI::GX2
 		static bool _firstFrame;
 		/** @brief Token of the batch that carried the last `GX2SwapScanBuffers()`, 0 if none */
 		static std::uint32_t _swapToken;
+		static std::uint32_t _benchBatchesThisFrame; // WIIU_TEST_HOOK (local only, do not commit)
 		static std::uint32_t _frameCounter;
 		/** @brief Set whenever the colour buffer, viewport or scissor may have changed since the last draw */
 		static bool _targetDirty;

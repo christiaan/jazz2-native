@@ -48,6 +48,11 @@
 #include <Utf8.h>
 
 using namespace nCine;
+#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit)
+extern bool WiiUTestHookWalk;
+#	include "../WiiUBench.h"
+#endif
+
 using namespace Jazz2::Tiles;
 
 namespace Jazz2
@@ -806,6 +811,11 @@ namespace Jazz2
 		// Supersampling the shared framebuffer restores the per-player resolution; the logical coordinate space (and
 		// thus the HUD layout) stays unchanged.
 		setup.Supersample = (PreferencesCache::PreferZoomOut && _assignedViewports.size() >= 3 ? 2 : 1);
+#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit): variant E
+		if ((::WiiUBenchFlags & WiiUBenchFlag::NoSupersample) != 0) {
+			setup.Supersample = 1;
+		}
+#endif
 		setup.NativeOutput = false;
 		return setup;
 	}
@@ -3577,6 +3587,23 @@ namespace Jazz2
 			input.PressedActions = processedInput.PressedActions;
 			input.RequiredMovement = processedInput.Movement;
 		}
+
+#if defined(DEATH_TARGET_WIIU) // WIIU_TEST_HOOK (local only, do not commit)
+		{
+			static std::uint32_t frame = 0;
+			if (::WiiUTestHookWalk) {
+				frame++;
+				// Run right, jump for 20 of every 70 frames, turn around every 900 frames; player 2+ mirror it
+				bool left = ((frame / 900) & 1) != 0;
+				for (std::int32_t i = 0; i < ControlScheme::MaxSupportedPlayers; i++) {
+					auto& in = _playerInputs[i];
+					in.PressedActions |= (1 << (std::int32_t)(left ? PlayerAction::Left : PlayerAction::Right)) | (1 << (std::int32_t)PlayerAction::Run);
+					if ((frame % 70) < 20) in.PressedActions |= (1 << (std::int32_t)PlayerAction::Jump);
+					in.RequiredMovement.X = (left ? -1.0f : 1.0f);
+				}
+			}
+		}
+#endif
 
 		// Also apply overriden actions (by touch controls)
 		{
