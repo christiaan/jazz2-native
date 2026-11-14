@@ -8,7 +8,8 @@ clear and present), 4 (shaders, uniforms, textures; the main menu renders), 5 (l
 all rescale shaders) and 6A (the CPU no longer waits for the GPU every frame) are done; see "Spike results" and the
 "Milestone N results" sections below. `Software` stays the default RHI on the Wii U until the GX2 backend draws the
 game. Milestone 7's docs and CI are done too. Scrolling and splitscreen were checked in Cemu; 3+ player splitscreen
-has wrong colours from the `Antialiasing` program (see "Cemu tests"). Next step: test on the owner's console (the rest of milestone 6
+has wrong colours from the `Antialiasing` program, which turned out to be a Cemu shader translation bug that
+also touches 6 other programs (see "Cemu tests"). Next step: test on the owner's console (the rest of milestone 6
 and milestone 7), then make `GX2` the default.
 
 ## Decisions
@@ -402,11 +403,39 @@ wrong colours**: brown walls turn magenta, green turns blue. The average colour 
   `Antialiasing` program (bicubic, 16 `texture().rgb` taps). With Zoom out off, or with the resolve pass
   disabled in a temporary build, the colours are right, so the GX2 build of `Antialiasing` is wrong in Cemu.
   It is the only program that path adds, and no other test ran it.
-- Not known yet: whether CafeGLSL miscompiles it (would be wrong on the console too) or Cemu mistranslates it.
-  Its pixel shader is 558 dwords and 17 GPRs (`spikes/cafeglsl/t/Antialiasing.log`, `-v` disassembly).
-  Next steps: run three-player splitscreen on the console; or dump Cemu's GLSL translation (see Testing) and
-  check the green and blue chains; or, as a workaround to test, compute the taps as `vec4` or
-  per channel and see whether the result changes.
+- **Cause found (2026-11-14): a Cemu bug, not a CafeGLSL one.** The pixel shader is 558 dwords and 17 GPRs
+  (`spikes/cafeglsl/t/Antialiasing.log`, `-v` disassembly; the committed program is byte-identical). Two
+  independent checks:
+  - An R600 ALU interpreter over that disassembly (`scripts/r600_emu_antialiasing.py <log> <seed>`; PV, PS,
+    read-before-write within a group) gives exactly the GLSL reference for random textures, so CafeGLSL's code is
+    correct.
+  - Cemu's GLSL translation of the same program (dumped with the Debug > Dump > Shaders sequence under Testing,
+    copied to `spikes/cafeglsl/t/Antialiasing.cemu_ps.txt`), run in Python
+    (`scripts/cemu_glsl_emu_antialiasing.py <dump> <seed>`), gives the right red and wrong green and blue,
+    which matches the screenshots.
+- The mechanism: an OP3 instruction (`MULADD`) has no write mask, so CafeGLSL writes the results it only needs
+  in PV/PS to the scratch register R123 (its disassembler prints that as `PV.c`/`PS.c`). In groups 15 and 37
+  the `y` slot and the trans slot both write R123.y. The ISA allows this and defines it: R600 ISA section 4.9
+  and R700 ISA section 4.9.2 recommend `DST_GPR = 123` to discard an OP3 result, and say that when ALU.Trans
+  and a vector unit write the same GPR element, the trans result wins the GPR write and "the PV register
+  reflects only the vector result". Cemu does not model that. `TrackGroupOutputPVPS()`
+  (`LatteDecompilerEmitGLSL.cpp`, about line 327) points both PV.y and PS at the written GPR (R123.y), and
+  the backups in `CreateGPRTemporaries()` are keyed by GPR element, so both reads get the trans result. The
+  Metal emitter (`LatteDecompilerEmitMSL.cpp`) is a copy with the same bug, and there is no separate SPIR-V
+  emitter. A fix would detect a vector unit and the trans unit writing the same (GPR, element) in one group,
+  write the vector result to the existing `PV{n}` variable as well, right after its own statement, and map
+  that unit with `SetLocationPSPVTemporary()` instead of `SetLocationGPR()`. Nothing like it is reported on
+  Cemu's issue tracker.
+- `python3 -I scripts/scan_cemu_pvps.py Sources/Shaders/Generated/Gx2GeneratedShaders.h` decodes every
+  generated program and lists the groups where the trans slot writes the same GPR element as a vector slot
+  and the next group reads that PV. 7 of 194 programs: `Antialiasing`, `Water`, `CombineWithWater`,
+  `CombineWithWaterLow` (both with and without `DITHER`) and `ResizeCleanEdge`. In Cemu these are wrong too,
+  just not as visibly as `Antialiasing` (the water scenes and CleanEdge looked right in milestone 5).
+- Expected on the console: correct. Still to confirm there with three-player splitscreen. A workaround in our
+  tree would mean renaming the colliding R123 write to another dead register, which needs liveness
+  analysis and risks the hardware for an emulator bug, so none was made. The proper fix is in Cemu (see
+  above). A ready-to-submit issue with attachments is in
+  `~/jazz2-wiiu-test/upstream/cemu-pvps-trans-collision/` (`REPORT.md`); submitting it is up to the owner.
 - With the Software build, splitscreen showed a black screen in Cemu (as `rescue/beach2` did earlier); not
   looked into.
 
@@ -447,8 +476,8 @@ wrong colours**: brown walls turn magenta, green turns blue. The average colour 
 5. **Done.** `--emit-gx2` for all programs and variants; render targets (lighting, blur, combine, water); all
    rescale shaders.
 6. A: **Done.** Fences, sectioned streaming and uniform rings, no `GX2DrawDone()` per frame.
-   Scrolling and splitscreen checked in Cemu (see above); open: the `Antialiasing` colour bug with 3+
-   players, and whether to enable the tile-layer window cache on GX2. Still open: batching and instancing paths (check on hardware), `RHI_CAP_*` tuning, and removing the 1280x720
+   Scrolling and splitscreen checked in Cemu (see above); the `Antialiasing` colour bug with 3+
+   players is Cemu's (confirm on the console); open: whether to enable the tile-layer window cache on GX2. Still open: batching and instancing paths (check on hardware), `RHI_CAP_*` tuning, and removing the 1280x720
    window cap if 1080p output is cheap enough (both need hardware).
 7. Docs and CI: **done** (2026-11-13). `Docs/Consoles.dox` describes both backends (Software stays the
    default), `Docs/ShaderCompiler.dox` documents `--emit-gx2`, and `.github/workflows/wiiu.yml` builds both
