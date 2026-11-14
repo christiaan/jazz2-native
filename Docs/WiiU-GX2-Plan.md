@@ -9,8 +9,8 @@ and 6A (the CPU no longer waits for the GPU every frame) are done; see "Spike re
 owner's console (Aroma), much more smoothly than `Software`, and outputs 1080p there. Three-player
 splitscreen has correct colours on the console (2026-11-14), which confirms that the wrong colours in Cemu
 come from Cemu's shader translation (see "Cemu tests"). `GX2` is now the default (milestone 7 is done).
-Still to check on the console: the batching and instancing paths, and the tile-layer window cache (benchmark
-packages are built, see "Testing").
+The console benchmark (2026-11-14, see "Console benchmark") favours the tile-layer window cache and batching,
+and shows that four players and the 3xBRZ, SABR and CleanEdge rescale modes are GPU-bound at 1080p.
 
 ## Decisions
 
@@ -440,6 +440,45 @@ wrong colours**: brown walls turn magenta, green turns blue. The average colour 
 - With the Software build, splitscreen showed a black screen in Cemu (as `rescue/beach2` did earlier); not
   looked into.
 
+## Console benchmark (2026-11-14)
+
+Both benchmark packages (see Testing) ran on the owner's console at 1080p with Zoom out on. The raw results are
+`~/jazz2-wiiu-test/console-bench/bench-nocache.txt` and `bench-cache.txt`, the log is `Jazz2-bench.log`
+there; no GPU timeouts or GX2 errors. Each phase lasted 15 s. "CPU" below is update + postUpdate + visit +
+draw, with batching on unless noted. Everything else in a frame was spent in `GX2WaitForFlip()`: `gpuWait`
+never showed up, so the CPU never had to wait for a fence, and `flipWait` holds both the idle time before
+vsync and any GPU time beyond the CPU's. The benchmark cannot tell those two apart.
+
+| Test | fps | CPU ms, no cache | CPU ms, cache |
+|---|---|---|---|
+| `prince/castle1`, 1 player | 60 | 2.2 | 0.6 |
+| `rescue/beach2` (water), 1 player | 60 | 1.3 | 0.8 |
+| `rescue/psych3` (dark), 1 player | 60 | 1.3 | 0.8 |
+| `prince/castle1`, 2 players | 60 | 4.8 | 3.2 |
+| `prince/castle1`, 4 players | 20 | 14.7 | 6.3 |
+| `prince/castle1`, 4 players, no batching | 18.5-19 | 16.6 | 13.5 |
+
+Rescale modes, `prince/castle1`, 1 player (the same with and without the cache): none and HQ2x 60 fps, SABR
+30 fps, 3xBRZ 20 fps (also with 2 players), CleanEdge 8.6 fps (117 ms a frame). The CPU time is the same as
+with no rescaling, so the rescale pass at 1920x1080 costs the GPU about 33 ms (3xBRZ) and 100 ms
+(CleanEdge). The CRT and Monochrome modes were not tested.
+
+Conclusions:
+- **Tile-layer window cache: worth turning on.** It cuts visit by about 70% and draw by about 75% with one
+  player, and halves the CPU time with four. No case got slower, and the frame rates did not change, because
+  every test is either at 60 fps already or limited by the GPU.
+- **Batching: keep it on.** On GX2 a batch is instanced sprites read from a uniform block, so this also
+  covers the instancing path. It halves the draw calls (30 instead of 60 with one player, 109 instead of 304
+  with four). With one or two players it changes nothing; with four, turning it off drops below 20 fps (up
+  to 67 ms a frame).
+- **Four players are GPU-bound.** The CPU needs 6-15 ms but frames take 50 ms. One player at 1080p
+  fits in a frame, so raw fill rate is not the limit; the likely cost is the per-viewport passes (lighting,
+  blur, combine), possibly with Zoom out enlarging each viewport's view. Finding out needs GPU timings
+  (`GX2SampleBottomGPUCycle()` around the passes).
+- **3xBRZ, SABR and CleanEdge are too slow at 1080p**, CleanEdge unplayably so. Options: hide them on GX2
+  (as `RHI_CAP_HEAVY_RESCALE_SHADERS` does for other backends, though 3xBRZ is not under that flag), or run
+  the rescale pass at 720p on the Wii U.
+
 ## Backend contract (what to write)
 
 - `RhiFwd.h`: a `WITH_RHI_GX2` arm with capability macros (`RHI_CAP_SHADERS`, `_FRAMEBUFFERS`,
@@ -479,8 +518,9 @@ wrong colours**: brown walls turn magenta, green turns blue. The average colour 
 6. A: **Done.** Fences, sectioned streaming and uniform rings, no `GX2DrawDone()` per frame.
    Scrolling and splitscreen checked in Cemu (see above); the `Antialiasing` colour bug with 3+
    players is Cemu's (confirmed on the console, 2026-11-14). The 1280x720 window cap is gone: GX2 builds
-   output 1080p (commit `c90db7b8`, tested on the console). Still open: whether to enable the tile-layer
-   window cache on GX2, the batching and instancing paths, and `RHI_CAP_*` tuning (all need hardware).
+   output 1080p (commit `c90db7b8`, tested on the console). Measured on the console (see "Console benchmark"):
+   the tile-layer window cache should be turned on for GX2, batching stays on. Still open: four-player GPU
+   cost and the heavy rescale modes at 1080p.
 7. Docs and CI: **done** (2026-11-13). `Docs/Consoles.dox` describes both backends (Software stays the
    default), `Docs/ShaderCompiler.dox` documents `--emit-gx2`, and `.github/workflows/wiiu.yml` builds both
    (`Jazz2_WiiU` and `Jazz2_WiiU_GX2`). The console tests are done (GX2 runs, 1080p, three-player
