@@ -535,7 +535,7 @@ What to do, by expected gain:
 4. Hide 3xBRZ, SABR and CleanEdge on GX2.
 5. Render targets in MEM1: probably faster, but wiiu-sdl2 owns MEM1 (see `Gx2Memory.h`).
 
-### Next console benchmark: variants (planned 2026-11-14, not started)
+### Next console benchmark: variants (planned 2026-11-14, run on the console 2026-11-14, see "Variant results")
 
 Cemu can check these variants for correctness (no hangs, no corrupted frames) but not for speed: its GPU
 timer is a stub, it renders on the host (lavapipe/llvmpipe in the container), and it has no MEM1/MEM2
@@ -617,6 +617,136 @@ and C-G in the backend and renderer behind those switches, GX2R allocation with 
 build, Cemu checks of every variant (frames correct, no deadlock, no new warnings), then both packages and
 a test list in `~/jazz2-wiiu-test/console-bench/`. Left for a later round: a 1280x720 screen target (chosen at
 startup), composing straight at 1920x1080, RGB565 intermediate targets.
+
+**Implemented (2026-11-14)** in `~/jazz2-wiiu-test/patches/bench-variants-hook.patch` (local only, never commit;
+see Testing). Every switch is a bit in `WiiUBenchFlags` (`Sources/WiiUBench.h`, a new file of the patch), set per
+test; all are off outside the benchmark. How each variant came out, where it differs from the plan above:
+- B1/B2 (`Gx2Device::PresentFrame()`, `WaitForPreviousFlip()`): before the flip loop the CPU waits for the GPU
+  timestamp of the batch that carried the previous swap, because GX2 may count a swap only once the GPU has
+  executed it; then `while (swapCount > flipCount) GX2WaitForFlip()`, at most 4 times so that counts that
+  never meet (scan-out still off on the first frame, after HOME) cannot hang. The wait goes into the
+  `flipWait` counter as before.
+- B3 (`SetRenderTarget`): flushes when the target being left had draws. `BatchStampCount` is 256, not 64:
+  B3 gives 31-33 batches a frame with four players in Cemu, and a token older than the stamp table waits for
+  a later batch, which would quietly serialise B13 again. Every row reports `batches` per frame. With B3 a
+  GPU timer segment can include time the GPU idled waiting for the next batch.
+- C/D (`UpscaleRenderPass::Initialize()`): with supersampling and no antialiasing option the subpass is not
+  created; C puts the `Antialiasing` (bicubic) shader on the screen pass with the texture size as input, D
+  keeps the sprite shader and makes the compose target's filter linear.
+- E: `LevelHandler::GetViewportSetup()` forces `Supersample = 1`. F is C plus
+  `PreferencesCache::LightingResolutionPercent = 50` (the existing option; it also shortens the blur chain by
+  one pass, see `PlayerViewport::Initialize()`).
+- G copies to the GamePad only in the first two frames of the measurement (one per scan buffer), so its image
+  freezes. G2 copies in two frames of every four, not every other frame: with double-buffered scan buffers a
+  copy every other frame would always land in the same buffer and the GamePad would alternate with a stale
+  frame; this way each buffer is at most three frames old (the image steps back one frame every other frame).
+  Either way the cost is what is measured.
+- MEM1 build (`-DWIIU_TEST_MEM1` in `CMAKE_CXX_FLAGS_RELEASE`, `_build_wiiu_gx2_mem1/`):
+  `Gx2Memory::AllocSurfaceMem1()` creates a GX2R surface with `BIND_COLOR_BUFFER` (SDL's allocator puts it
+  in MEM1) and `Free()` returns it through `GX2RDestroySurfaceEx()`; anything that does not fit falls back to
+  MEM2. The screen buffer, the compose target (`UpscaleRenderPass::_target`, not the HUD overlay) and each
+  player's scene target (`PlayerViewport::_viewTexture`) ask for MEM1 (`WiiUBenchMem1Hint` while they are
+  created). `EnterBackground()` frees all MEM1 blocks after `GX2DrawDone()`, including retired ones;
+  render targets allocate again on next use, the screen buffer in `EnterForeground()`. Cemu: 1080p screen at
+  `0xF4000800`, then 4.7 MB compose and four 1.2 MB scene targets, 17.9 MB in all, freed again on each level
+  change. The HOME round trip cannot be tried in Cemu.
+- Added to the benchmark: GPU timer rows `scanCopyTV` and `scanCopyDRC`; per-test counts of uniform-ring waits
+  and `RetireBlock()` falling back to `Finish()` (`ringWaits retireFinishes` column); the name table is
+  cleared at each test; the batching-off phase is gone (one 15 s phase per test); `#seconds <warmup>
+  <measure>` in the test list overrides the 6 s / 15 s.
+
+Cemu check (2026-11-14, correctness only): all 11 variants with four players and Zoom out, B13 with one player
+and with four without Zoom out, C on `rescue/beach2`, and the MEM1 build with A, B13, C and F, ran to the end
+with no hang, no new warning, no ring wait or `Finish()` fallback; screenshots of B13, C, D, E, F and G2 look
+right (E visibly softer). Packages for the console: `~/jazz2-wiiu-test/console-bench/variants/`
+(`Jazz2Bench_mem2.wuhb` with 40 tests, `Jazz2Bench_mem1.wuhb` with 17, their test lists and a `README.txt` with
+the steps).
+
+### Variant results (console, 2026-11-14)
+
+Both packages ran on the console: `~/jazz2-wiiu-test/console-bench/variants/bench-mem2.txt` and
+`bench-mem1.txt`; `Jazz2.log` there covers only the MEM2 session (it ran second and overwrote the MEM1 log).
+No GX2 errors, no hang, `ringWaits` and `retireFinishes` 0 in every test; the only log noise is the known
+missing Lori assets and the `_cameraUniformDataMap` assertion at shutdown (also in the earlier logs). With the
+split present some GPU timer frames come back `invalid` (up to 40 of 900); the rest still add up.
+
+**Caveat: the MEM2 session ran with lighting at 50%** (`light 360x202` for a 720x405 scene, blur chain one
+pass shorter), the MEM1 session and the earlier GPU-timer run at 100%. The MEM1 session ran first, so the
+F variant's 50% most likely reached the saved preferences there (cause not found; the hook restores the value
+only in memory). Effects: MEM2 F equals MEM2 C, MEM2 numbers are about 1.2 ms lighter (4 players) than with
+the default, so MEM1's gains below are understated. Check the console's lighting option before the next run,
+and make the hook keep variant values out of `PreferencesCache::Save()`.
+
+fps = 1000 / average frame ms. `>20.8` = frames over 20.8 ms (missed 60 fps), out of about 15 s of frames.
+GPU = pass rows plus both scan copies, excluding idle `between viewports` time.
+
+| `prince/castle1` unless noted | Variant | fps MEM2 | GPU ms MEM2 | fps MEM1 | GPU ms MEM1 |
+|---|---|---|---|---|---|
+| 1 player | A | 60 | 9.2 | 60 | 4.4 |
+| 2 players | A | 60 | 9.3 | 60 | 4.6 |
+| 4 players, Zoom out off | A | 51.5 (126 over 20.8) | 9.6 | 60 | 5.1 |
+| | B1, B2, B13 | 60 | 9.7-9.8 | 60 (B13) | 5.3 |
+| | B3 | 53.6 | 10.0 | | |
+| 3 players, Zoom out | A | 20 | 28.1 | 30 | 20.2 |
+| | B13 | 35.1 (max 33.6) | 28.5 | 48.1 | 20.4 |
+| | C | 45.0 | 22.2 | **60** | 15.6 |
+| 4 players, Zoom out | A | 19.8 | 30.6 | 26.3 | 22.0 |
+| | B1 | 32.2 (max 47.7) | 30.8 | | |
+| | B2 | 30.0 (max 33.6) | 30.7 | | |
+| | B3 | 20.0 | 30.5 | | |
+| | B13 | 32.1 (max 43.6) | 31.1 | 44.1 | 22.2 |
+| | C | 39.6 | 24.9 | 56.2 | 17.4 |
+| | D | 49.6 | 19.4 | | |
+| | E | 60 | 9.9 | | |
+| | F | 40.2 (= C, see caveat) | 24.7 | **59.6** (6 over 20.8) | 16.5 |
+| | G / G2 | 33.8 / 32.1 | 29.5 / 30.5 | | |
+| `rescue/beach2`, 4 players, Zoom out | A | 20.0 | 28.0 | 27.9 | 20.5 |
+| | B1 / B2 / B13 | 34.5 / 30.0 / 35.0 | 28.4-28.7 | 45.7 (B13) | 21.2 |
+| | C | 42.6 | 22.8 | 57.2 | 16.5 |
+| | D | 52.6 | 17.6 | | |
+| | E | 60 | 9.5 | | |
+| | F | 43.7 | 22.2 | **59.9** (1 over 20.8) | 15.4 |
+
+Per pass, MEM2 to MEM1 (A): scene 720x405 1.51 to 0.79 ms, compose 1440x810 3.56 to 2.00, screen pass with no
+rescaling 2.50 to 0.98, TV copy 2.57 to 1.02, GamePad copy 1.62 to 0.62. Passes whose target stayed in MEM2
+gain only from reading MEM1: antialias 2880x1620 5.98 to 4.58, supersampled screen pass 8.65 to 8.09 (and
+8.07 with C, where it reads the MEM1 compose target directly).
+
+Findings:
+- **MEM1 render targets are the biggest single win**: they halve every pass whose target moved (about
+  2.5x for the scan copies, which read the MEM1 screen buffer), cut 1-player GPU time from 9.2 to 4.4 ms
+  and 4-player Zoom-out from 30.6 to 22.0 ms, and alone take 4 players with Zoom out off from 51.5 to
+  60 fps. They should become the default on GX2 (needs the MEM1 lifecycle across HOME; see below).
+- **Split present (B1/B2) works and is needed** for 3-4 players: 20 to 30-35 fps with MEM2, 26-30 to
+  44-48 fps with MEM1, 4 players Zoom out off 51.5 to 60. B1 and B13 average higher than B2 but judder:
+  with a GPU frame between 16.7 and 33.3 ms the frames alternate between one, two and three vsyncs (max
+  41-48 ms); B2 holds a steady 30 (max 33.6 ms), probably because its single flush and its wait before the scan
+copies keep every frame on a two-vsync rhythm. Once a frame fits
+  in 16.7 ms (MEM1 + C/F) the difference disappears.
+- **B3 (flush at each render-target switch) brings nothing**: B13 equals B1 within noise, B3 alone stays at
+  20 fps with Zoom out. Drop it.
+- **The 2880x1620 antialias subpass (C) costs 6.2 ms** (MEM2) and the bicubic screen pass costs 5.3 ms
+  more than a linear one (D: screen pass 8.7 to 3.4 ms). The bicubic screen pass is shader-bound: MEM1
+  barely changes it (8.07 ms). The whole supersampled chain costs about 21 ms over E (no supersampling,
+  60 fps at 9.9 ms).
+- **MEM1 + C reaches 56-57 fps, MEM1 + F 59.6-59.9 fps** with 4 players and Zoom out, but F's margin is
+  thin (GPU 15.4-16.5 ms plus scan copies, a few missed frames). MEM1 + D was not tested; from the numbers
+  above it should leave several ms of headroom (screen pass 8.1 to perhaps 1.5-2 ms).
+- **GamePad copy**: 1.6 ms MEM2, 0.6 ms MEM1. G/G2 gain 1-2 fps at best; not worth freezing the GamePad.
+- The CPU stays at 6-12 ms with 4 players; it is not the limit after the split present.
+
+Open: the owner's visual verdict on C, D and E (shimmer, softness) and the result of the HOME round trip
+with the MEM1 package; the log of that session was overwritten.
+
+Next, by expected gain:
+1. MEM1 render targets in the backend proper (screen buffer, compose target, per-player scene targets), with
+   MEM2 fallback and release/reallocation in `EnterBackground()`/`EnterForeground()`; confirm a HOME round
+   trip on the console.
+2. Split present (B1 or B2) in the backend proper. Choose by pacing: B2 for a steady 30 when over budget,
+   or B1 with a swap interval of 2 whenever the GPU frame exceeds 16.7 ms.
+3. Drop the antialias subpass when only supersampling asks for it (C); choose bicubic (C) or linear (D) by
+   the owner's visual verdict; lighting at 50% with 3+ players (F) if C alone stays short of 60.
+4. One short console run of MEM1 with B1/B2 and C, D, F (and lighting reset to 100%) to confirm.
 
 ## Backend contract (what to write)
 
@@ -732,5 +862,11 @@ startup), composing straight at 1920x1080, RGB565 intermediate targets.
   `~/jazz2-wiiu-test/console-bench/gpu/`. A Cemu run with CPU-clock stand-ins showed the four-player chain: four
   times scene, light and blur (720x406 each with Zoom out), then `compose` 720x405 and 1440x810 (supersampled 2x),
   an `antialias` target of 2880x1620, and the 1080p screen.
+- Benchmark variants (2026-11-14): `~/jazz2-wiiu-test/patches/bench-variants-hook.patch` (local only, never commit;
+  it replaces `bench-gpu-hook.patch` and adds the new file `Sources/WiiUBench.h`, so remove that file by hand after
+  `git apply -R`). Test lines are `<episode>/<level> <rescale> <players> <noZoomOut> <variant>`; each build reads
+  `bench-tests-<build>.txt` (`mem2`, or `mem1` when built with `-DWIIU_TEST_MEM1`) and falls back to `bench.txt`,
+  and writes `bench-<build>.txt`. To regenerate the patch: `git add -N Sources/WiiUBench.h && git diff >
+  .../bench-variants-hook.patch && git reset Sources/WiiUBench.h`. See "Next console benchmark: variants".
 - Cemu's graphics API is OpenGL (`<api>0</api>` in `settings.xml`); Vulkan (`1`, lavapipe in the container)
   also works and behaved the same in milestone 5.
