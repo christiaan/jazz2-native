@@ -1,16 +1,15 @@
 # Wii U: native GX2 rendering backend (plan and hand-off)
 
-Status (2026-11-13): branch `wiiu-port` has a working Wii U port that renders with the `Software` RHI
-and presents through wiiu-sdl2's GX2 renderer (see the Wii U section of `Docs/Consoles.dox`). It boots
-to the main menu in Cemu 2.6 and has not been tested on hardware yet. The owner wants full quality,
-which needs a native `GX2` RHI backend. Milestones 1 and 2 (the spikes), 3 (the backend skeleton with
-clear and present), 4 (shaders, uniforms, textures; the main menu renders), 5 (levels, render targets and
-all rescale shaders) and 6A (the CPU no longer waits for the GPU every frame) are done; see "Spike results" and the
-"Milestone N results" sections below. `Software` stays the default RHI on the Wii U until the GX2 backend draws the
-game. Milestone 7's docs and CI are done too. Scrolling and splitscreen were checked in Cemu; 3+ player splitscreen
-has wrong colours from the `Antialiasing` program, which turned out to be a Cemu shader translation bug that
-also touches 6 other programs (see "Cemu tests"). Next step: test on the owner's console (the rest of milestone 6
-and milestone 7), then make `GX2` the default.
+Status (2026-11-14): branch `wiiu-port` has a working Wii U port with two RHIs: `Software` (the default,
+presenting through wiiu-sdl2's GX2 renderer) and the native `GX2` backend (see the Wii U section of
+`Docs/Consoles.dox`). Milestones 1 and 2 (the spikes), 3 (the backend skeleton with clear and present),
+4 (shaders, uniforms, textures; the main menu renders), 5 (levels, render targets and all rescale shaders)
+and 6A (the CPU no longer waits for the GPU every frame) are done; see "Spike results" and the
+"Milestone N results" sections below. Milestone 7's docs and CI are done too. The GX2 build runs on the
+owner's console (Aroma), much more smoothly than `Software`, and outputs 1080p there. Three-player
+splitscreen has correct colours on the console (2026-11-14), which confirms that the wrong colours in Cemu
+come from Cemu's shader translation (see "Cemu tests"). Next step: make `GX2` the default (milestone 7).
+Still to check on the console: the batching and instancing paths, and the tile-layer window cache.
 
 ## Decisions
 
@@ -431,7 +430,8 @@ wrong colours**: brown walls turn magenta, green turns blue. The average colour 
   and the next group reads that PV. 7 of 194 programs: `Antialiasing`, `Water`, `CombineWithWater`,
   `CombineWithWaterLow` (both with and without `DITHER`) and `ResizeCleanEdge`. In Cemu these are wrong too,
   just not as visibly as `Antialiasing` (the water scenes and CleanEdge looked right in milestone 5).
-- Expected on the console: correct. Still to confirm there with three-player splitscreen. A workaround in our
+- **Confirmed on the console (2026-11-14):** three-player splitscreen in "Formerly a Prince", started from the
+  menu with Zoom out on, has correct colours. A workaround in our
   tree would mean renaming the colliding R123 write to another dead register, which needs liveness
   analysis and risks the hardware for an emulator bug, so none was made. The proper fix is in Cemu (see
   above). A ready-to-submit issue with attachments is in
@@ -477,12 +477,14 @@ wrong colours**: brown walls turn magenta, green turns blue. The average colour 
    rescale shaders.
 6. A: **Done.** Fences, sectioned streaming and uniform rings, no `GX2DrawDone()` per frame.
    Scrolling and splitscreen checked in Cemu (see above); the `Antialiasing` colour bug with 3+
-   players is Cemu's (confirm on the console); open: whether to enable the tile-layer window cache on GX2. Still open: batching and instancing paths (check on hardware), `RHI_CAP_*` tuning, and removing the 1280x720
-   window cap if 1080p output is cheap enough (both need hardware).
+   players is Cemu's (confirmed on the console, 2026-11-14). The 1280x720 window cap is gone: GX2 builds
+   output 1080p (commit `c90db7b8`, tested on the console). Still open: whether to enable the tile-layer
+   window cache on GX2, the batching and instancing paths, and `RHI_CAP_*` tuning (all need hardware).
 7. Docs and CI: **done** (2026-11-13). `Docs/Consoles.dox` describes both backends (Software stays the
    default), `Docs/ShaderCompiler.dox` documents `--emit-gx2`, and `.github/workflows/wiiu.yml` builds both
-   (`Jazz2_WiiU` and `Jazz2_WiiU_GX2`). Still open: testing on the owner's console, then making `GX2` the
-   default (`cmake/ncine_options.cmake`, the Consoles.dox table and section, the CI artifact names).
+   (`Jazz2_WiiU` and `Jazz2_WiiU_GX2`). The console tests are done (GX2 runs, 1080p, three-player
+   splitscreen). Still open: making `GX2` the default (`cmake/ncine_options.cmake`, the Consoles.dox table
+   and section, the CI artifact names).
 
 ## Testing
 
