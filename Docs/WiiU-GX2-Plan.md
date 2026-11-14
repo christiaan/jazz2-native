@@ -807,6 +807,20 @@ Next, by expected gain:
    backend's own; of the variant letters only E and F still do anything. In Cemu (2 s + 3 s per test) all nine ran
    with `batches=2.00` per frame (the split present), no ring waits and no `Finish()` fallbacks.
    The tests that need watching now run first (castle1, 4 players, Zoom out: A, F, then Antialiasing on).
+   **Ran on the console (2026-11-14), lighting at 100%:** `~/jazz2-wiiu-test/console-bench/final/bench-mem2.txt`
+   and `Jazz2.log`. Every test with the Antialiasing option off holds 60 fps (16.68 ms average, every GPU timer
+   frame good, `ringWaits` and `retireFinishes` 0, `batches=2.00`); 4 players with Zoom out went from 19.8-26.3 fps
+   in the variant run to 60. Frames over 20.8 ms out of about 900: castle1 4p Zoom out A 3 (max 22.5 ms), F 0,
+   beach2 4p A 1, F 2 (max 25.7), all others 0. GPU ms (pass rows plus scan copies): 1p 4.4, 2p 4.6, 4p without
+   Zoom out 5.3, 3p Zoom out 8.6, 4p Zoom out 10.5 (castle1) and 9.3 (beach2), F about 1 ms less. The 4p Zoom out
+   chain: four scenes 0.8 ms each, `compose 1440x810` 2.0, screen 1.1, scan copies 1.7. The Antialiasing option
+   (rescale 128) brings the 2880x1620 subpass back: 43 fps (23.3 ms, 257 frames over 20.8 ms), GPU 22.3 ms
+   (`antialias` 4.8, screen 8.1). MEM1 at 18.0 MB as in Cemu. The owner watched: 1 and 2 smooth, no shimmer when
+   the camera moves, about the same to the eye; Antialiasing visibly slower; the HOME round trip in a level fine on
+   TV and GamePad (log: `EnterBackground()`/`EnterForeground()`, no errors). Log noise only the known missing Lori
+   and `sugar_rush.wav` assets. Conclusions: F (lighting at 50%) is not needed; B1's judder and the swap interval
+   of 2 are moot while frames fit in 16.7 ms; the Antialiasing option is the only slow path left at 1080p with 4
+   players (it could fall back to the linear resolve, or be documented as expensive).
    **Open bug (2026-11-14): startup freeze while archiving a large previous log.** Starting the installed
    `jazz2-gx2` for step 1 froze on the boot screen. `Jazz2.log` on the card was still the 1.1 MB log of the last
    variants run (earlier launches archived logs of up to about 180 KB) and a new, empty `Jazz2.log.gz.tmp` was
