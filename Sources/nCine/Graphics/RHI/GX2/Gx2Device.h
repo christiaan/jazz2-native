@@ -382,10 +382,11 @@ namespace nCine::RHI::GX2
 
 			Taken from the current chunk of the uniform ring. When it is full, the ring moves on to the next
 			chunk after waiting for the batch that last read that one, which has normally retired long ago.
+			Returns `nullptr` if that wait times out (a GPU hang), leaving the ring where it was.
 		*/
 		static std::uint8_t* AllocateUniformData(std::uint32_t size);
-		/** @brief Uploads a stage's loose uniforms and binds its explicit uniform blocks */
-		static void ApplyStageUniforms(const Gx2ShaderProgram& program, const Gx2ShaderProgram::StageBindings& bindings, bool vertexStage);
+		/** @brief Uploads a stage's loose uniforms and binds its explicit uniform blocks, returns `false` if a block could not be allocated */
+		static bool ApplyStageUniforms(const Gx2ShaderProgram& program, const Gx2ShaderProgram::StageBindings& bindings, bool vertexStage);
 		/** @brief Binds one attribute buffer per enabled attribute of the program's vertex format */
 		static void ApplyAttributeBuffers(Gx2ShaderProgram& program);
 		/** @brief Common draw path; skips the draw while the bound program has no binaries */

@@ -2613,7 +2613,8 @@ namespace
 		runs but Cemu 2.6 cannot translate: it rejects the whole vertex shader, and every draw using it vanishes.
 		`int((float(x) + 0.5) / N.0)` gives the same quotient for a non-negative `x` far beyond any vertex index
 		a batch reaches (the half-unit bias keeps the rounding of the reciprocal away from the integer steps).
-		Only the two forms above are rewritten.
+		Only the two forms above are rewritten, and only as a whole dividend: after `*`, `/` or `%` (as in
+		`2 * gl_VertexID / 6`) the match is just the right operand, so it is left as an integer division.
 	*/
 	String MakeVertexIdDivisionsFloat(StringView source)
 	{
@@ -2666,6 +2667,14 @@ namespace
 						dividend = String{Id} + " + "_s + k;
 					}
 				}
+			}
+			// Not the right operand of a multiplicative operator, which binds to it before the division does
+			std::size_t before = start;
+			while (before > 0 && (source[before - 1] == ' ' || source[before - 1] == '\t')) {
+				before--;
+			}
+			if (before > 0 && (source[before - 1] == '*' || source[before - 1] == '/' || source[before - 1] == '%')) {
+				continue;
 			}
 			// " / N"
 			std::size_t slash = skipSpaces(after);

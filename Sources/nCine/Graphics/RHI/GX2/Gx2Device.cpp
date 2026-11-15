@@ -888,6 +888,7 @@ namespace nCine::RHI::GX2
 		if (_uniformChunkOffset + alignedSize > UniformRingChunkSize) {
 			// Every draw that reads the chunk being left is in the open batch or an earlier one
 			const std::uint32_t leftChunk = _uniformChunk;
+			const std::uint32_t leftOffset = _uniformChunkOffset;
 			_uniformChunkTokens[leftChunk] = _openBatch;
 			_uniformChunk = (_uniformChunk + 1) % UniformRingChunkCount;
 			_uniformChunkOffset = 0;
@@ -900,7 +901,14 @@ namespace nCine::RHI::GX2
 					LOGW("The uniform ring caught up with the GPU, waiting ({} times so far)", waits);
 				}
 				if (!WaitForUse(token)) {
+					// Only on a GPU timeout. The chunk may still be read, so it keeps its token and the ring stays
+					// on the chunk it was leaving (still current, so its token goes back to 0); the next block
+					// waits again, and this draw is skipped rather than submitted with stale uniforms.
 					LOGW("Waiting for uniform ring chunk {} timed out", _uniformChunk);
+					_uniformChunkTokens[leftChunk] = 0;
+					_uniformChunk = leftChunk;
+					_uniformChunkOffset = leftOffset;
+					return nullptr;
 				}
 				// A wait for the open batch flushes it, and the draw asking for this block is then recorded in
 				// the next one. Its earlier blocks may sit in the chunk just left (one draw's blocks are far
@@ -914,30 +922,32 @@ namespace nCine::RHI::GX2
 		return data;
 	}
 
-	void Gx2Device::ApplyStageUniforms(const Gx2ShaderProgram& program, const Gx2ShaderProgram::StageBindings& bindings, bool vertexStage)
+	bool Gx2Device::ApplyStageUniforms(const Gx2ShaderProgram& program, const Gx2ShaderProgram::StageBindings& bindings, bool vertexStage)
 	{
 		if (bindings.LooseLocation >= 0 && bindings.LooseSize > 0) {
-			if (std::uint8_t* block = AllocateUniformData(bindings.LooseSize)) {
-				std::memset(block, 0, bindings.LooseSize);
-				for (const Gx2ShaderProgram::LooseUniform& uniform : bindings.LooseUniforms) {
-					const std::uint8_t* value = program.ResolveUniform(uniform.Name);
-					if (value == nullptr) {
-						continue;
-					}
-					for (std::uint32_t i = 0; i < uniform.Count; i++) {
-						const std::uint32_t offset = uniform.Offset + i * uniform.Stride;
-						if (offset + uniform.ElementSize > bindings.LooseSize) {
-							break;
-						}
-						CopyWordsSwapped(block + offset, value + i * uniform.ElementSize, uniform.ElementSize);
-					}
+			std::uint8_t* block = AllocateUniformData(bindings.LooseSize);
+			if (block == nullptr) {
+				return false;
+			}
+			std::memset(block, 0, bindings.LooseSize);
+			for (const Gx2ShaderProgram::LooseUniform& uniform : bindings.LooseUniforms) {
+				const std::uint8_t* value = program.ResolveUniform(uniform.Name);
+				if (value == nullptr) {
+					continue;
 				}
-				Gx2Memory::FlushCpuWrites(block, bindings.LooseSize, GX2_INVALIDATE_MODE_UNIFORM_BLOCK);
-				if (vertexStage) {
-					GX2SetVertexUniformBlock(std::uint32_t(bindings.LooseLocation), bindings.LooseSize, block);
-				} else {
-					GX2SetPixelUniformBlock(std::uint32_t(bindings.LooseLocation), bindings.LooseSize, block);
+				for (std::uint32_t i = 0; i < uniform.Count; i++) {
+					const std::uint32_t offset = uniform.Offset + i * uniform.Stride;
+					if (offset + uniform.ElementSize > bindings.LooseSize) {
+						break;
+					}
+					CopyWordsSwapped(block + offset, value + i * uniform.ElementSize, uniform.ElementSize);
 				}
+			}
+			Gx2Memory::FlushCpuWrites(block, bindings.LooseSize, GX2_INVALIDATE_MODE_UNIFORM_BLOCK);
+			if (vertexStage) {
+				GX2SetVertexUniformBlock(std::uint32_t(bindings.LooseLocation), bindings.LooseSize, block);
+			} else {
+				GX2SetPixelUniformBlock(std::uint32_t(bindings.LooseLocation), bindings.LooseSize, block);
 			}
 		}
 
@@ -952,7 +962,7 @@ namespace nCine::RHI::GX2
 			// for the same range, and the batched blocks are rewritten every frame anyway
 			std::uint8_t* block = AllocateUniformData(size);
 			if (block == nullptr) {
-				continue;
+				return false;
 			}
 			CopyWordsSwapped(block, data, size);
 			Gx2Memory::FlushCpuWrites(block, size, GX2_INVALIDATE_MODE_UNIFORM_BLOCK);
@@ -962,6 +972,7 @@ namespace nCine::RHI::GX2
 				GX2SetPixelUniformBlock(binding.Location, size, block);
 			}
 		}
+		return true;
 	}
 
 	void Gx2Device::ApplyAttributeBuffers(Gx2ShaderProgram& program)
@@ -1010,8 +1021,10 @@ namespace nCine::RHI::GX2
 		}
 		GX2SetFetchShader(fetchShader);
 
-		ApplyStageUniforms(*program, program->GetVertexBindings(), true);
-		ApplyStageUniforms(*program, program->GetPixelBindings(), false);
+		if (!ApplyStageUniforms(*program, program->GetVertexBindings(), true) ||
+			!ApplyStageUniforms(*program, program->GetPixelBindings(), false)) {
+			return;
+		}
 
 		for (const Gx2ShaderProgram::SamplerBinding& sampler : program->GetSamplers()) {
 			if (const Gx2Texture* texture = GetBoundTexture(sampler.EngineUnit)) {
