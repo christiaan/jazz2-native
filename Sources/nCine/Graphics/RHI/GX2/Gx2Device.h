@@ -387,8 +387,13 @@ namespace nCine::RHI::GX2
 		static std::uint8_t* AllocateUniformData(std::uint32_t size);
 		/** @brief Uploads a stage's loose uniforms and binds its explicit uniform blocks, returns `false` if a block could not be allocated */
 		static bool ApplyStageUniforms(const Gx2ShaderProgram& program, const Gx2ShaderProgram::StageBindings& bindings, bool vertexStage);
-		/** @brief Binds one attribute buffer per enabled attribute of the program's vertex format */
-		static void ApplyAttributeBuffers(Gx2ShaderProgram& program);
+		/**
+			@brief Binds one attribute buffer per enabled attribute of the program's vertex format
+
+			Returns `false` if an enabled attribute has no usable buffer, so the draw doesn't read
+			the stream an earlier draw left in that slot.
+		*/
+		static bool ApplyAttributeBuffers(Gx2ShaderProgram& program);
 		/** @brief Common draw path; skips the draw while the bound program has no binaries */
 		static void DrawCommon(PrimitiveType primitive, std::int32_t firstVertex, std::uint32_t count,
 			bool indexed, IndexFormat indexFormat, std::uintptr_t indexOffset, std::int32_t numInstances, std::int32_t baseVertex);

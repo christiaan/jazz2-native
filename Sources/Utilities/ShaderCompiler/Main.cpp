@@ -2686,8 +2686,22 @@ namespace
 			if (n.empty() || (numberEnd < source.size() && (isIdentifierChar(source[numberEnd]) || source[numberEnd] == '.'))) {
 				continue;
 			}
+			// A leading zero makes an integer literal octal, but "010.0" would be read as decimal
+			std::uint32_t divisor = 0;
+			bool isOctal = (n.size() > 1 && n[0] == '0');
+			bool valid = true;
+			for (char c : n) {
+				if (isOctal && c > '7') {
+					valid = false;
+					break;
+				}
+				divisor = divisor * (isOctal ? 8u : 10u) + std::uint32_t(c - '0');
+			}
+			if (!valid) {
+				continue;
+			}
 			result += source.slice(copied, start);
-			result += "int((float("_s + dividend + ") + 0.5) / "_s + n + ".0)"_s;
+			result += "int((float("_s + dividend + ") + 0.5) / "_s + Death::format("{}.0)", divisor);
 			copied = numberEnd;
 			pos = numberEnd - 1;
 		}

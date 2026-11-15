@@ -975,7 +975,7 @@ namespace nCine::RHI::GX2
 		return true;
 	}
 
-	void Gx2Device::ApplyAttributeBuffers(Gx2ShaderProgram& program)
+	bool Gx2Device::ApplyAttributeBuffers(Gx2ShaderProgram& program)
 	{
 		Gx2VertexFormat& format = program.GetVertexFormat();
 		for (std::uint32_t i = 0; i < format.GetAttributeCount(); i++) {
@@ -985,7 +985,7 @@ namespace nCine::RHI::GX2
 			}
 			const Gx2BufferObject* vbo = attribute.GetVbo();
 			if (vbo == nullptr || vbo->GetGpuData() == nullptr || attribute.GetBaseOffset() >= vbo->GetSize()) {
-				continue;
+				return false;
 			}
 			// The stream reads the attribute's offset within the vertex (see Gx2ShaderProgram::GetFetchShader()),
 			// so the buffer starts at the first vertex of the mesh
@@ -998,6 +998,7 @@ namespace nCine::RHI::GX2
 			GX2SetAttribBuffer(attribute.GetIndex(), std::uint32_t(vbo->GetSize() - attribute.GetBaseOffset()), stride, base);
 			vbo->MarkUsed(_openBatch);
 		}
+		return true;
 	}
 
 	void Gx2Device::DrawCommon(PrimitiveType primitive, std::int32_t firstVertex, std::uint32_t count,
@@ -1033,7 +1034,9 @@ namespace nCine::RHI::GX2
 			}
 		}
 
-		ApplyAttributeBuffers(*program);
+		if (!ApplyAttributeBuffers(*program)) {
+			return;
+		}
 
 		const GX2PrimitiveMode mode = TranslatePrimitive(primitive);
 		const std::uint32_t instances = std::uint32_t(numInstances > 0 ? numInstances : 1);
