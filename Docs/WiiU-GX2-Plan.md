@@ -910,8 +910,10 @@ The scripts below are in `Tools/WiiU/` (setup and usage: `Tools/WiiU/README.md`)
 - Cemu 2.6 runs headless under Xvfb in a container (`~/jazz2-wiiu-test/`: `cemu/` extracted AppImage
   in portable mode with a preseeded `settings.xml` that skips the first-run wizard, image
   `cemu-xvfb`, `Tools/WiiU/cemu/run.sh` takes screenshots, `B=_build_wiiu_gx2 Tools/WiiU/testrun.sh` repacks and runs that build, default `_build_wiiu`).
-  **Cemu stops at every `tw` instruction**, including the conditional `tweq` GCC 16 emits for
-  libstdc++'s `shared_ptr` overflow check. That shows up as a grey screen with the main thread parked
+  **Cemu 2.6 hangs on conditional traps** (`tw`/`twi` with a non-zero condition field), such as the `tweq` GCC 16
+  emits for libstdc++'s `shared_ptr` overflow check: its interpreter never evaluates the condition and never moves
+  past the instruction. Cemu main (commit `7db2b77`, not in a release yet) skips them instead, without evaluating
+  them. Draft bug report, repro and patch: `~/jazz2-wiiu-test/upstream/cemu-tw-trap/`. That shows up as a grey screen with the main thread parked
   in an OS wait. `Tools/WiiU/patch_tw.py` replaces conditional traps with `nop` in a test copy of the ELF
   before `elf2rpl`/`wuhbtool`. Real hardware is not affected.
 - Cemu's GDB stub (`Cemu --enable-gdbstub`, port 1337) works with `powerpc-eabi-gdb` from the

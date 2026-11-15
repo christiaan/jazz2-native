@@ -4,8 +4,9 @@
 #
 # No Jazz Jackrabbit 2 data is present, so the game stops at the main menu with its "requires original
 # files" message; getting there still creates the graphics device, loads shaders and fonts and draws
-# the menu. The bundle must have its conditional trap instructions patched out (patch_tw.py), because
-# Cemu treats every `tw` as a debugger breakpoint. Coreinit logging (settings.xml) makes Cemu write the
+# the menu. The bundle must have its conditional trap instructions patched out (patch_tw.py): Cemu 2.6
+# does not evaluate a trap's condition and never moves past a `tw` or `twi` with a non-zero condition
+# field, so the thread hangs on the first one, even though it never fires on hardware. Coreinit logging (settings.xml) makes Cemu write the
 # game's log lines (sent through OSReport) to its log.txt, which is what is checked.
 # Cemu runs in portable mode from a fresh portable/ directory: an existing one there is deleted.
 set -u

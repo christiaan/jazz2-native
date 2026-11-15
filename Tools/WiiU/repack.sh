@@ -1,5 +1,5 @@
 #!/bin/bash
-# Repack build $B (default _build_wiiu) for Cemu: patch out the conditional traps Cemu stops at
+# Repack build $B (default _build_wiiu) for Cemu: patch out the conditional traps Cemu 2.6 hangs on
 # (see patch_tw.py), then elf2rpl + wuhbtool into $WIIU_TEST_DIR/jazz2.wuhb.
 R=$(cd "$(dirname "$0")/../.." && pwd)
 T=${WIIU_TEST_DIR:-$HOME/jazz2-wiiu-test}

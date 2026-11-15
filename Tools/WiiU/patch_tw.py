@@ -1,5 +1,5 @@
-# Test-only: replaces conditional trap instructions (tw with TO != 31, twi) in .text with nop so Cemu,
-# which breaks on every trap, can run the build. usage: patch_tw.py in.elf out.elf
+# Test-only: replaces conditional trap instructions (tw with TO != 31, twi) in .text with nop so Cemu 2.6,
+# which never moves past them (it does not evaluate the condition), can run the build. usage: patch_tw.py in.elf out.elf
 import struct,sys
 d=bytearray(open(sys.argv[1],'rb').read())
 shoff,=struct.unpack('>I',d[0x20:0x24]); shentsize,shnum,shstrndx=struct.unpack('>HHH',d[0x2e:0x34])

@@ -42,8 +42,8 @@ jobs:
 
     - name: 'Create Test Bundle'
       run: |
-        # Cemu stops at every conditional trap instruction (it uses `tw` for its debugger breakpoints), so they
-        # are replaced with nop in a test copy; the released bundle is not touched
+        # Cemu 2.6 hangs on the first conditional trap instruction (it never moves past one, although the condition
+        # is never true on hardware), so they are replaced with nop in a test copy; the released bundle is not touched
         python3 -I ./.github/wiiu-cemu/patch_tw.py ./_build/jazz2.elf ./_build/jazz2_test.elf
         ${DEVKITPRO}/tools/bin/elf2rpl ./_build/jazz2_test.elf ./_build/jazz2_test.rpx
         mkdir ./_test/

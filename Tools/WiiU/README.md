@@ -37,7 +37,7 @@ B=_build_wiiu_gx2 SHOTS="30 60" Tools/WiiU/testrun.sh   # repack, run in Cemu, s
 ```
 
 `testrun.sh` calls `repack.sh`, which copies `jazz2.elf`, patches out the conditional trap instructions Cemu
-stops at (`patch_tw.py`; real hardware is not affected) and packs `$T/jazz2.wuhb` with `elf2rpl` and
+2.6 hangs on (`patch_tw.py`; real hardware is not affected) and packs `$T/jazz2.wuhb` with `elf2rpl` and
 `wuhbtool`. The game's `Jazz2.log` usually ends up empty, because Cemu is killed at the end of the run; see
 the plan's "Testing" section for getting a log through `OSReport()` instead.
 
