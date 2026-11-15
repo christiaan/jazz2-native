@@ -53,9 +53,6 @@ extern "C" {
 #if defined(WITH_LIBRETRO)
 #	include "../nCine/Backends/Libretro/LibretroApplication.h"
 #endif
-#if defined(WITH_RHI_GX2)
-#	include <gx2/display.h>
-#endif
 
 using namespace Death::Containers::Literals;
 using namespace Death::IO;
@@ -183,7 +180,6 @@ namespace Jazz2
 	bool PreferencesCache::EnableTouchVibration = true;
 	TouchButtonLayout PreferencesCache::TouchButtons[(std::size_t)TouchButtonSlot::Count] = {};
 	std::uint16_t PreferencesCache::SafeArea[(std::size_t)SafeAreaEdge::Count] = {};
-	ScreenResolution PreferencesCache::PreferredScreenResolution = ScreenResolution::Auto;
 	Uuid PreferencesCache::UniquePlayerID;
 	Uuid PreferencesCache::UniqueServerID;
 	String PreferencesCache::PlayerName;
@@ -1607,12 +1603,6 @@ namespace
 							SafeArea[i] = std::min<std::uint16_t>(uc.ReadValueAsLE<std::uint16_t>(), MaxSafeArea);
 						}
 					}
-
-					if (version >= 20) {
-						std::uint8_t screenResolution = uc.ReadValue<std::uint8_t>();
-						PreferredScreenResolution = (screenResolution <= (std::uint8_t)ScreenResolution::Hd1080
-							? (ScreenResolution)screenResolution : ScreenResolution::Auto);
-					}
 				} else {
 					// The file is too new or corrupted
 					resetConfig = true;
@@ -1999,9 +1989,6 @@ namespace
 			co.WriteValueAsLE<std::uint16_t>(SafeArea[i]);
 		}
 
-		// Screen buffer size of the Wii U's GX2 backend (v20+)
-		co.WriteValue<std::uint8_t>((std::uint8_t)PreferredScreenResolution);
-
 		co.Dispose();
 		so->Dispose();
 
@@ -2029,20 +2016,6 @@ namespace
 		gfxDevice.SetDrawableSize(panel.X * RenderingResolutionPercent / 100, panel.Y * RenderingResolutionPercent / 100);
 #endif
 	}
-
-#if defined(WITH_RHI_GX2)
-	Vector2i PreferencesCache::GetScreenResolutionSize(ScreenResolution mode)
-	{
-		if (mode == ScreenResolution::Auto) {
-			// wiiu-sdl2 sizes the TV scan buffer after the same setting, so the screen buffer is then copied to
-			// the TV without scaling
-			GX2TVScanMode tvMode = GX2GetSystemTVScanMode();
-			mode = (tvMode == GX2_TV_SCAN_MODE_1080I || tvMode == GX2_TV_SCAN_MODE_1080P
-				? ScreenResolution::Hd1080 : ScreenResolution::Hd720);
-		}
-		return (mode == ScreenResolution::Hd1080 ? Vector2i(1920, 1080) : Vector2i(1280, 720));
-	}
-#endif
 
 	void PreferencesCache::ApplyPerformanceMetrics()
 	{
