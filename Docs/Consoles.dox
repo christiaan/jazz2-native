@@ -1005,10 +1005,10 @@ convert the original files on the console.
     converted into @cpp "sd:/wiiu/apps/Jazz2/Cache/" @ce on the first start, which takes a while.
     Settings, saves and @cpp "Jazz2.log" @ce are written next to them.
 -   <b>Cemu</b> (2.6) runs the @cpp ".wuhb" @ce too, with its emulated SD card holding
-    @cpp "wiiu/apps/Jazz2/Source" @ce. It treats every `tw` instruction as a debugger breakpoint, even a
-    conditional one that never fires on hardware, and GCC 16 emits those for libstdc++'s checks
-    (the `shared_ptr` reference count overflow test, for example). The game then stops with a grey
-    screen at the first one. Replacing the conditional traps in @cpp "jazz2.elf" @ce with `nop` and
+    @cpp "wiiu/apps/Jazz2/Source" @ce. It does not evaluate the condition of a trap instruction and never moves
+    past a conditional one (`tw`/`twi`), even though it never fires on hardware, and GCC 16 emits
+    those for libstdc++'s checks (the `shared_ptr` reference count overflow test, for example). The
+    game then hangs with a grey screen at the first one. Replacing the conditional traps in @cpp "jazz2.elf" @ce with `nop` and
     running `elf2rpl` and `wuhbtool` again gives a build Cemu can run. The console is not affected.
 
 @m_class{m-noindent}
