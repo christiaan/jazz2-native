@@ -143,7 +143,7 @@ namespace nCine::RHI::GX2
 		GX2SetupContextStateEx(_contextState, TRUE);
 		GX2SetContextState(_contextState);
 
-		// Every program CafeGLSL generates for this engine uses uniform blocks (see Docs/WiiU-GX2-Plan.md)
+		// Every program CafeGLSL generates for this engine uses uniform blocks (see `--emit-gx2` in Docs/ShaderCompiler.dox)
 		GX2SetShaderMode(GX2_SHADER_MODE_UNIFORM_BLOCK);
 
 		std::memset(&_screenBuffer, 0, sizeof(_screenBuffer));

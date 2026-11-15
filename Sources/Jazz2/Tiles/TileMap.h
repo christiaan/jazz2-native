@@ -819,8 +819,8 @@ namespace Jazz2::Tiles
 			be batched with the others. Rounded to a few levels on the consoles that budget their particles
 			(see @ref MaxWeatherDebrisCount), the weather is a few draws.
 		*/
-#if defined(DEATH_TARGET_DREAMCAST) || defined(DEATH_TARGET_N64) || defined(DEATH_TARGET_WII) || defined(DEATH_TARGET_GAMECUBE) || defined(DEATH_TARGET_PSP) || \
-		defined(DEATH_TARGET_3DS) || defined(DEATH_TARGET_AMIGAOS)
+#if defined(DEATH_TARGET_DREAMCAST) || defined(DEATH_TARGET_N64) || defined(DEATH_TARGET_WII) || defined(DEATH_TARGET_WIIU) || defined(DEATH_TARGET_GAMECUBE) || \
+		defined(DEATH_TARGET_PSP) || defined(DEATH_TARGET_3DS) || defined(DEATH_TARGET_AMIGAOS)
 		static constexpr std::int32_t WeatherDepthStep = 40;
 #else
 		static constexpr std::int32_t WeatherDepthStep = 1;

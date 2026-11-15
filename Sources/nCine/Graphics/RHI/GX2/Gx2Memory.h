@@ -24,8 +24,7 @@ namespace nCine::RHI::GX2
 		surfaces are taken from that heap through GX2R (@ref AllocColorSurfaceMem1()), which allocates with the
 		allocator SDL installed (`GX2RSetAllocator()`). Such a block is only valid while in the foreground:
 		@ref Gx2Device::EnterBackground() frees every one of them and the owners allocate them again when next
-		used. On the console, render targets in MEM1 halve the time of every pass that draws into them
-		(Docs/WiiU-GX2-Plan.md, "Variant results").
+		used. On the console, render targets in MEM1 halve the time of every pass that draws into them.
 	*/
 	namespace Gx2Memory
 	{

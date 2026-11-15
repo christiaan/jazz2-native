@@ -239,7 +239,7 @@ elseif(NCINE_PREFERRED_RHI STREQUAL "RDP")
 	)
 elseif(NCINE_PREFERRED_RHI STREQUAL "GX2")
 	# Nintendo Wii U native GX2 rendering backend (wut). Mirrors the RSX backend; Gx2Memory hands out MEM2
-	# from the default heap, since wiiu-sdl2 owns MEM1 (see Docs/WiiU-GX2-Plan.md).
+	# from the default heap, and MEM1 (owned by wiiu-sdl2) only for the hottest render targets (see Gx2Memory.h).
 	list(APPEND SOURCES
 		${NCINE_SOURCE_DIR}/nCine/Graphics/RHI/GX2/Gx2BufferObject.cpp
 		${NCINE_SOURCE_DIR}/nCine/Graphics/RHI/GX2/Gx2Device.cpp

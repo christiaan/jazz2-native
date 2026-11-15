@@ -1115,7 +1115,7 @@ namespace nCine::RHI
 // programmable, so this is a full-pipeline backend like the RSX one it mirrors: both capabilities are
 // advertised and the whole bloom / lighting / combine / rescale chain is meant to run. The shaders are the
 // GLSL the OpenGL targets use, compiled offline by CafeGLSL and embedded per program variant (see
-// Docs/WiiU-GX2-Plan.md for the bring-up state; until the generated table exists every draw is skipped).
+// `--emit-gx2` in Docs/ShaderCompiler.dox).
 //
 // `RHI_CAP_BATCHING` is defined: a GX2 uniform block holds 64 KB, which fits 585 sprite instances, and the
 // batched shaders are compiled with that `BATCH_SIZE` (see Gx2Device::MaxBatchSize).
