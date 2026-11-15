@@ -440,7 +440,8 @@ wrong colours**: brown walls turn magenta, green turns blue. The average colour 
   tree would mean renaming the colliding R123 write to another dead register, which needs liveness
   analysis and risks the hardware for an emulator bug, so none was made. The proper fix is in Cemu (see
   above). A ready-to-submit issue with attachments is in
-  `~/jazz2-wiiu-test/upstream/cemu-pvps-trans-collision/` (`REPORT.md`); submitting it is up to the owner.
+  `~/jazz2-wiiu-test/upstream/cemu-pvps-trans-collision/` (`REPORT.md`); filed 2026-11-15 as
+  <https://github.com/cemu-project/Cemu/issues/2122>, with the water case below as a second example.
 - **The blue streaks along the water surface in the PR's `rescue/beach2` screenshot are the same Cemu bug**
   (2026-11-15, raised by the upstream maintainer on PR 193). In `CombineWithWater`'s pixel shader, group 46 computes
   the reflection row `2 * uWaterLevel - uvLocal.y` in the `w` slot while the trans slot writes R123.w for the
@@ -922,7 +923,9 @@ The scripts below are in `Tools/WiiU/` (setup and usage: `Tools/WiiU/README.md`)
   **Cemu 2.6 hangs on conditional traps** (`tw`/`twi` with a non-zero condition field), such as the `tweq` GCC 16
   emits for libstdc++'s `shared_ptr` overflow check: its interpreter never evaluates the condition and never moves
   past the instruction. Cemu main (commit `7db2b77`, not in a release yet) skips them instead, without evaluating
-  them. Draft bug report, repro and patch: `~/jazz2-wiiu-test/upstream/cemu-tw-trap/`. That shows up as a grey screen with the main thread parked
+  them. Bug report and repro: `~/jazz2-wiiu-test/upstream/cemu-tw-trap/`, filed 2026-11-15 as
+  <https://github.com/cemu-project/Cemu/issues/2121> (without the drafted `fix.patch`: Cemu's CONTRIBUTING.md asks for
+  human-written code). That shows up as a grey screen with the main thread parked
   in an OS wait. `Tools/WiiU/patch_tw.py` replaces conditional traps with `nop` in a test copy of the ELF
   before `elf2rpl`/`wuhbtool`. Real hardware is not affected.
 - Cemu's GDB stub (`Cemu --enable-gdbstub`, port 1337) works with `powerpc-eabi-gdb` from the
