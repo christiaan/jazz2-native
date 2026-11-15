@@ -360,7 +360,7 @@ namespace nCine
 #elif defined(DEATH_TARGET_WIIU)
 		// Espresso has three cores, and threads created through newlib's pthreads may run on any of them
 		return static_cast<std::uint32_t>(OSGetCoreCount());
-#elif defined(DEATH_TARGET_WII) || defined(DEATH_TARGET_WIIU) || defined(DEATH_TARGET_GAMECUBE) || defined(DEATH_TARGET_DREAMCAST) || defined(DEATH_TARGET_PSP)
+#elif defined(DEATH_TARGET_WII) || defined(DEATH_TARGET_GAMECUBE) || defined(DEATH_TARGET_DREAMCAST) || defined(DEATH_TARGET_PSP)
 		return 1;
 #elif defined(DEATH_TARGET_3DS)
 		// What a homebrew application can actually run threads on: the ARM11 MPCore has two cores (four on the
