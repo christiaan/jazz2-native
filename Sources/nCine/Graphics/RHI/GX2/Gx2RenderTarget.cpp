@@ -29,6 +29,7 @@ namespace nCine::RHI::GX2
 		// contents become the host store's business again
 		for (std::uint32_t i = 0; i < MaxColorAttachments; i++) {
 			if (_colorTextures[i] != nullptr) {
+				_colorTextures[i]->RemoveAttachedTarget(this);
 				_colorTextures[i]->SetRenderTarget(false);
 				_colorTextures[i] = nullptr;
 			}
@@ -44,9 +45,11 @@ namespace nCine::RHI::GX2
 			return;
 		}
 		if (_colorTextures[index] != nullptr) {
+			_colorTextures[index]->RemoveAttachedTarget(this);
 			_colorTextures[index]->SetRenderTarget(false);
 		}
 		_colorTextures[index] = &texture;
+		texture.AddAttachedTarget(this);
 		// From now on the GPU writes these texels, so the texture stops uploading its host store over them
 		texture.SetRenderTarget(true);
 		_surfaceValid = false;
@@ -57,8 +60,22 @@ namespace nCine::RHI::GX2
 		if (index >= MaxColorAttachments || _colorTextures[index] == nullptr) {
 			return;
 		}
+		_colorTextures[index]->RemoveAttachedTarget(this);
 		_colorTextures[index]->SetRenderTarget(false);
 		_colorTextures[index] = nullptr;
+		_surfaceValid = false;
+	}
+
+	void Gx2RenderTarget::ForgetColorTexture(const Gx2Texture& texture)
+	{
+		for (std::uint32_t i = 0; i < MaxColorAttachments; i++) {
+			if (_colorTextures[i] == &texture) {
+				_colorTextures[i] = nullptr;
+			}
+		}
+		if (_surfaceTexture == &texture) {
+			_surfaceTexture = nullptr;
+		}
 		_surfaceValid = false;
 	}
 

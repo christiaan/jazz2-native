@@ -2,6 +2,7 @@
 
 #include "Gx2Texture.h"
 #include "Gx2Device.h"
+#include "Gx2RenderTarget.h"
 
 #include "../../../../Main.h"
 
@@ -113,6 +114,11 @@ namespace nCine::RHI::GX2
 	{
 		// The device tracks bound textures by pointer, so it has to forget this one before the memory goes
 		Gx2Device::UnbindTexture(this);
+		// So does a render target that still has it attached; its destructor would otherwise call back into
+		// this freed texture
+		for (Gx2RenderTarget* target : _attachedTargets) {
+			target->ForgetColorTexture(*this);
+		}
 		ReleaseGpu();
 	}
 
@@ -179,6 +185,26 @@ namespace nCine::RHI::GX2
 		// GPU copy is rebuilt in the other layout; a target's texels stop coming from the host store
 		ReleaseGpu();
 		_contentsDirty = !isRenderTarget;
+	}
+
+	void Gx2Texture::AddAttachedTarget(Gx2RenderTarget* target)
+	{
+		for (Gx2RenderTarget* attached : _attachedTargets) {
+			if (attached == target) {
+				return;
+			}
+		}
+		_attachedTargets.push_back(target);
+	}
+
+	void Gx2Texture::RemoveAttachedTarget(Gx2RenderTarget* target)
+	{
+		for (std::size_t i = 0; i < _attachedTargets.size(); i++) {
+			if (_attachedTargets[i] == target) {
+				_attachedTargets.erase(_attachedTargets.begin() + i);
+				return;
+			}
+		}
 	}
 
 	void Gx2Texture::SetPreferFastMemory(bool value)
@@ -461,8 +487,9 @@ namespace nCine::RHI::GX2
 
 	void* Gx2Texture::MapStreamingTexels(std::int32_t& strideBytes)
 	{
-		// A render target's texels belong to the GPU, and only the promoted RGBA8 store has a GPU copy at all
-		if (_isRenderTarget || _format != PixelFormat::RGBA8) {
+		// A render target's texels belong to the GPU, and only an RGBA8 store has a GPU copy at all. A format
+		// promoted to RGBA8 (R8, RG8, RGB8) isn't stored verbatim, so the caller's texels would not line up.
+		if (_isRenderTarget || _format != PixelFormat::RGBA8 || _uploadFormat != PixelFormat::RGBA8) {
 			return nullptr;
 		}
 		if (!EnsureGpuTexture()) {

@@ -16,6 +16,8 @@ using namespace Death::Containers;
 
 namespace nCine::RHI::GX2
 {
+	class Gx2RenderTarget;
+
 	/**
 		@brief Texture object of the GX2 backend (aliased as `RHI::Texture`)
 
@@ -135,6 +137,16 @@ namespace nCine::RHI::GX2
 		/** @brief Marks the texture as (or no longer as) a color render target (the GPU copy is rebuilt, since the GPU writes it from then on) */
 		void SetRenderTarget(bool isRenderTarget);
 		/**
+			@brief Records that a render target has this texture as a colour attachment (called by @ref Gx2RenderTarget)
+
+			A texture can be attached to several targets at once (the upscale pass draws into one texture through
+			three viewports). A texture destroyed while still attached tells those targets to forget it, because
+			the engine may destroy a viewport's texture before the viewport (`PlayerViewport` does).
+		*/
+		void AddAttachedTarget(Gx2RenderTarget* target);
+		/** @brief Records that a render target no longer has this texture attached (called by @ref Gx2RenderTarget) */
+		void RemoveAttachedTarget(Gx2RenderTarget* target);
+		/**
 			@brief Asks for the render target's texels to go in MEM1 (see @ref Gx2Memory)
 
 			Applies from the next allocation of the GPU copy, and only while the texture is a render target;
@@ -247,6 +259,8 @@ namespace nCine::RHI::GX2
 		mutable bool _samplerDirty;
 		// Token of the last batch with a draw that samples the GPU copy, 0 if none
 		mutable std::uint32_t _lastUse;
+		// Render targets this texture is a colour attachment of (see AddAttachedTarget())
+		SmallVector<Gx2RenderTarget*, 2> _attachedTargets;
 
 		void Allocate(PixelFormat format, std::int32_t width, std::int32_t height);
 		/** @brief (Re)creates the GPU copy and its control structure when missing, then refreshes it if stale */

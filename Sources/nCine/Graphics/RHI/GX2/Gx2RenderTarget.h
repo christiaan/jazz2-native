@@ -90,6 +90,8 @@ namespace nCine::RHI::GX2
 		void AttachColorTexture(Gx2Texture& texture, std::uint32_t index);
 		/** @brief Detaches any texture from the colour attachment with the given index */
 		void DetachColorTexture(std::uint32_t index);
+		/** @brief Drops a texture that is being destroyed from the attachments, without calling back into it */
+		void ForgetColorTexture(const Gx2Texture& texture);
 
 		/** @brief Records a depth/stencil buffer (no storage is created, see the class documentation) */
 		void AttachDepthStencil(DepthStencilFormat format, std::int32_t width, std::int32_t height);
