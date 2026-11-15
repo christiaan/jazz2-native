@@ -2837,11 +2837,13 @@ namespace Death { namespace IO {
 #	endif
 
 #	if !defined(DEATH_TARGET_EMSCRIPTEN) && !defined(DEATH_TARGET_DREAMCAST) && !defined(DEATH_TARGET_N64) && \
-		!defined(DEATH_TARGET_VITA) && !defined(DEATH_TARGET_PS3) && !defined(DEATH_TARGET_3DS)
+		!defined(DEATH_TARGET_VITA) && !defined(DEATH_TARGET_PS3) && !defined(DEATH_TARGET_3DS) && \
+		!defined(DEATH_TARGET_WIIU)
 		// If we created a new file with an explicitly added S_IWUSR permission, we may need to update its mode bits to match the source file.
 		// PSL1GHT is excluded because its newlib declares fchmod() without implementing it - lv2 has only a
 		// path-based chmod - and the copy is no less correct for leaving the destination's own mode alone.
 		// libdragon has neither form of chmod, and nothing it mounts keeps permission bits to update.
+		// WUT's devoptab has only the path-based chmod too, so fchmod() fails there with ENOSYS.
 		if (destMode != sourceMode && ::fchmod(destFd, sourceMode) != 0) {
 			success = false;
 		}
