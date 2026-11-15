@@ -348,10 +348,20 @@ namespace nCine::RHI::GX2
 		static inline bool CanSubmit() {
 			return (_initialized && _inForeground);
 		}
-		/** @brief Returns the colour buffer of the current target (the screen if none is bound) and its size */
+		/**
+			@brief Returns the colour buffer of the current target (the screen if none is bound) and its size
+
+			Returns `nullptr` if the bound target has no colour buffer (its texture could not get GPU storage),
+			so a clear or draw meant for it doesn't land on the screen.
+		*/
 		static const GX2ColorBuffer* GetCurrentColorBuffer(std::int32_t& width, std::int32_t& height);
-		/** @brief Binds the current target's colour buffer and programs viewport and scissor, if they changed */
-		static void ApplyTarget();
+		/**
+			@brief Binds the current target's colour buffer and programs viewport and scissor, if they changed
+
+			Returns `false` if the current target has no colour buffer; it stays pending, so every draw
+			checks it again.
+		*/
+		static bool ApplyTarget();
 		/** @brief Programs the viewport and scissor of the current target from the tracked engine state */
 		static void ApplyViewportAndScissor(std::int32_t targetWidth, std::int32_t targetHeight);
 		/** @brief Makes the backend's context state current again after GX2 clobbered the pipeline state */

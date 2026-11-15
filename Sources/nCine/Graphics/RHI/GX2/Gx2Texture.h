@@ -58,8 +58,8 @@ namespace nCine::RHI::GX2
 		const GX2Surface* GetSurface() const;
 		/** @brief Releases the GPU copy (on re-allocation and destruction) */
 		void ReleaseGpu() const;
-		/** @brief Binds this texture and its sampler state to a pixel shader texture unit */
-		void ApplySamplerState(std::uint32_t textureUnit) const;
+		/** @brief Binds this texture and its sampler state to a pixel shader texture unit, returns `false` if it has no GPU copy */
+		bool ApplySamplerState(std::uint32_t textureUnit) const;
 		/** @brief Records that a draw of the batch with @p token samples the GPU copy (see @ref Gx2Device::GetUseToken()) */
 		inline void MarkUsed(std::uint32_t token) const {
 			_lastUse = token;

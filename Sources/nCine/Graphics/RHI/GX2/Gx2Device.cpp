@@ -567,25 +567,26 @@ namespace nCine::RHI::GX2
 	const GX2ColorBuffer* Gx2Device::GetCurrentColorBuffer(std::int32_t& width, std::int32_t& height)
 	{
 		if (_currentRenderTarget != nullptr) {
-			if (const GX2ColorBuffer* colorBuffer = _currentRenderTarget->GetColorBuffer(width, height)) {
-				return colorBuffer;
-			}
+			return _currentRenderTarget->GetColorBuffer(width, height);
 		}
 		width = _screenWidth;
 		height = _screenHeight;
 		return &_screenBuffer;
 	}
 
-	void Gx2Device::ApplyTarget()
+	bool Gx2Device::ApplyTarget()
 	{
 		if (!_targetDirty || !CanSubmit()) {
-			return;
+			return true;
 		}
 		std::int32_t width, height;
 		const GX2ColorBuffer* colorBuffer = GetCurrentColorBuffer(width, height);
+		if (colorBuffer == nullptr) {
+			return false;
+		}
 		// The buffer's registers are read when it is set, so a target whose surface was rebuilt in place (same
 		// object, new image or size) counts as a different one
-		const void* image = (colorBuffer != nullptr ? colorBuffer->surface.image : nullptr);
+		const void* image = colorBuffer->surface.image;
 		if (_applied.ColorBuffer == nullptr || _applied.ColorBuffer != colorBuffer || _applied.Image != image ||
 			_applied.Width != width || _applied.Height != height) {
 			GX2SetColorBuffer(colorBuffer, GX2_RENDER_TARGET_0);
@@ -599,6 +600,7 @@ namespace nCine::RHI::GX2
 		}
 		ApplyViewportAndScissor(width, height);
 		_targetDirty = false;
+		return true;
 	}
 
 	void Gx2Device::ApplyViewportAndScissor(std::int32_t targetWidth, std::int32_t targetHeight)
@@ -1013,7 +1015,9 @@ namespace nCine::RHI::GX2
 			return;
 		}
 
-		ApplyTarget();
+		if (!ApplyTarget()) {
+			return;
+		}
 
 		if (_lastProgram != program) {
 			GX2SetVertexShader(program->GetVertexShader());
@@ -1029,7 +1033,10 @@ namespace nCine::RHI::GX2
 
 		for (const Gx2ShaderProgram::SamplerBinding& sampler : program->GetSamplers()) {
 			if (const Gx2Texture* texture = GetBoundTexture(sampler.EngineUnit)) {
-				texture->ApplySamplerState(sampler.HardwareUnit);
+				// The unit would keep the texture an earlier draw left on it, which may have been released since
+				if (!texture->ApplySamplerState(sampler.HardwareUnit)) {
+					return;
+				}
 				texture->MarkUsed(_openBatch);
 			}
 		}

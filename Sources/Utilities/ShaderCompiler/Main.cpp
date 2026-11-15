@@ -3449,7 +3449,8 @@ namespace
 			String probeLog;
 			if (haveCafeglsl && ProbeCafeglsl(cafeglslPath, probeLog)) {
 				String path = fs::CombinePath(outputDirectory, "Gx2GeneratedShaders.h"_s);
-				if (RunEmitGx2(path.data(), cafeglslPath, inputArgs.data(), inputCount) != 0) {
+				// The option, not the located path: a bare name found through PATH would be taken as an explicit path
+				if (RunEmitGx2(path.data(), cafeglslOption, inputArgs.data(), inputCount) != 0) {
 					return 1;
 				}
 				writtenNames.emplace_back("Gx2GeneratedShaders.h"_s);

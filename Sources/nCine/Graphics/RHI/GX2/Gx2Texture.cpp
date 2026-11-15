@@ -300,11 +300,11 @@ namespace nCine::RHI::GX2
 		Gx2Memory::FlushCpuWrites(dst, _gpuTexture.surface.imageSize, GX2_INVALIDATE_MODE_TEXTURE);
 	}
 
-	void Gx2Texture::ApplySamplerState(std::uint32_t textureUnit) const
+	bool Gx2Texture::ApplySamplerState(std::uint32_t textureUnit) const
 	{
 		const GX2Texture* texture = GetGx2Texture();
 		if (texture == nullptr) {
-			return;
+			return false;
 		}
 		if (_samplerDirty) {
 			GX2InitSampler(&_sampler, TranslateWrap(_wrap), TranslateFilter(_minFilter, _magFilter));
@@ -312,6 +312,7 @@ namespace nCine::RHI::GX2
 		}
 		GX2SetPixelTexture(texture, textureUnit);
 		GX2SetPixelSampler(&_sampler, textureUnit);
+		return true;
 	}
 
 	const GX2Texture* Gx2Texture::GetGx2Texture() const
