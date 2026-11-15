@@ -171,6 +171,8 @@ namespace nCine::RHI::GX2
 		static void SetRenderTarget(Gx2RenderTarget* renderTarget);
 		/** @brief Clears a destroyed program from the device's current-program tracking (called from ~Gx2ShaderProgram) */
 		static void OnProgramDestroyed(const Gx2ShaderProgram* program);
+		/** @brief Makes the next draw with @p program bind its shaders again, because its binaries were released */
+		static void OnProgramBinariesReleased(const Gx2ShaderProgram* program);
 
 		/** @brief Blocks until the GPU has executed everything submitted so far (`GX2DrawDone()`) */
 		static void Finish();

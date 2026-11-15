@@ -211,6 +211,9 @@ namespace nCine::RHI::GX2
 
 	void Gx2ShaderProgram::ReleaseBinaries()
 	{
+		// The device skips the shader binds while this program stays the last one used, so it has to forget
+		// it before the binaries move; a relinked program would otherwise keep drawing with the old addresses
+		Gx2Device::OnProgramBinariesReleased(this);
 		_hasBinaries = false;
 		Gx2Device::RetireBlock(_vertexProgram);
 		Gx2Device::RetireBlock(_pixelProgram);

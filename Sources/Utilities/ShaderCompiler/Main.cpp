@@ -2649,7 +2649,12 @@ namespace
 			while (open > 0 && (source[open - 1] == ' ' || source[open - 1] == '\t')) {
 				open--;
 			}
-			if (open > 0 && source[open - 1] == '(') {
+			// Only a bare group: after a name the parentheses belong to a call or a constructor like "int(...)"
+			std::size_t beforeOpen = (open > 0 ? open - 1 : 0);
+			while (beforeOpen > 0 && (source[beforeOpen - 1] == ' ' || source[beforeOpen - 1] == '\t')) {
+				beforeOpen--;
+			}
+			if (open > 0 && source[open - 1] == '(' && (beforeOpen == 0 || !isIdentifierChar(source[beforeOpen - 1]))) {
 				std::size_t p = skipSpaces(after);
 				if (p < source.size() && source[p] == '+') {
 					std::size_t numberEnd;
@@ -2918,11 +2923,31 @@ namespace
 		return out;
 	}
 
+	/**
+		Compiles a trivial program to find out whether @p compilerPath runs at all
+
+		@ref LocateCafeglsl() falls back to a bare name for `PATH` to resolve, so finding a path says nothing
+		about whether the compiler is there.
+	*/
+	bool ProbeCafeglsl(const String& compilerPath, String& log)
+	{
+		Gx2ShaderEntry probe;
+		return CompileGx2Shaders(compilerPath, "#version 330\nvoid main() { gl_Position = vec4(0.0); }\n"_s,
+			"#version 330\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n"_s, probe, log);
+	}
+
 	int RunEmitGx2(const char* outputPath, StringView compilerOption, char** inputPaths, int inputCount)
 	{
 		String compilerPath;
 		if (!LocateCafeglsl(compilerOption, compilerPath)) {
 			std::fprintf(stderr, "error: CafeGLSL's glslcompiler not found at \"%s\"\n", String{compilerOption}.data());
+			return 1;
+		}
+		// Every variant would fail without a working compiler, and the header would be replaced by an empty table
+		String probeLog;
+		if (!ProbeCafeglsl(compilerPath, probeLog)) {
+			std::fprintf(stderr, "error: CafeGLSL's glslcompiler (\"%s\") cannot compile: %s\n", compilerPath.data(),
+				FirstLine(probeLog).data());
 			return 1;
 		}
 
@@ -3398,10 +3423,8 @@ namespace
 			// than emptied when the compiler is missing, because the console has no compiler to fall back on
 			String cafeglslPath;
 			const bool haveCafeglsl = LocateCafeglsl(cafeglslOption, cafeglslPath);
-			Gx2ShaderEntry probe;
 			String probeLog;
-			if (haveCafeglsl && CompileGx2Shaders(cafeglslPath, "#version 330\nvoid main() { gl_Position = vec4(0.0); }\n"_s,
-					"#version 330\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n"_s, probe, probeLog)) {
+			if (haveCafeglsl && ProbeCafeglsl(cafeglslPath, probeLog)) {
 				String path = fs::CombinePath(outputDirectory, "Gx2GeneratedShaders.h"_s);
 				if (RunEmitGx2(path.data(), cafeglslPath, inputArgs.data(), inputCount) != 0) {
 					return 1;

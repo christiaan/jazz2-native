@@ -673,6 +673,14 @@ namespace nCine::RHI::GX2
 		}
 	}
 
+	void Gx2Device::OnProgramBinariesReleased(const Gx2ShaderProgram* program)
+	{
+		// The program stays current (a relink keeps using the same object), only the shader binds are redone
+		if (_lastProgram == program) {
+			_lastProgram = nullptr;
+		}
+	}
+
 	void Gx2Device::BindTexture(std::uint32_t unit, const Gx2Texture* texture)
 	{
 		if (unit < MaxTextureUnits) {
@@ -879,7 +887,8 @@ namespace nCine::RHI::GX2
 		}
 		if (_uniformChunkOffset + alignedSize > UniformRingChunkSize) {
 			// Every draw that reads the chunk being left is in the open batch or an earlier one
-			_uniformChunkTokens[_uniformChunk] = _openBatch;
+			const std::uint32_t leftChunk = _uniformChunk;
+			_uniformChunkTokens[leftChunk] = _openBatch;
 			_uniformChunk = (_uniformChunk + 1) % UniformRingChunkCount;
 			_uniformChunkOffset = 0;
 			const std::uint32_t token = _uniformChunkTokens[_uniformChunk];
@@ -893,6 +902,10 @@ namespace nCine::RHI::GX2
 				if (!WaitForUse(token)) {
 					LOGW("Waiting for uniform ring chunk {} timed out", _uniformChunk);
 				}
+				// A wait for the open batch flushes it, and the draw asking for this block is then recorded in
+				// the next one. Its earlier blocks may sit in the chunk just left (one draw's blocks are far
+				// smaller than a chunk, so it never spans more than that one), which must outlive it as well.
+				_uniformChunkTokens[leftChunk] = _openBatch;
 			}
 			_uniformChunkTokens[_uniformChunk] = 0;
 		}
