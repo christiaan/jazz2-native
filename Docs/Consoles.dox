@@ -203,20 +203,20 @@ can't be reconverted can be upgraded from the unversioned layout to version 1 by
 
 Decided at configure time from the platform. Values are for a default `Release` configuration.
 
-Feature | N64 | Dreamcast | Wii | GameCube | 3DS | PSP | PS2 | PS3 | Vita | Switch
-------- | --- | --------- | --- | -------- | --- | --- | --- | --- | ---- | ------
-Threads @m_span{m-text m-dim} (`NCINE_WITH_THREADS`) @m_endspan | **No** | Yes | Yes | Yes | Yes @m_span{m-text m-dim} (pthread shim over libctru) @m_endspan | Yes | **No** | **No** | Yes | Yes
-Asynchronous tracing @m_span{m-text m-dim} (`DEATH_TRACE_ASYNC`) @m_endspan | No | No | No | No | No | No | No | No | No | No
-Audio backend | `N64` @m_span{m-text m-dim} (RSP mixer) @m_endspan | `AICA` | `ASND` | `ASND` | `NDSP` | `PSP` | `PS2` | `PS3` | `OpenAL` if the SDK has one | `OpenAL` if the SDK has one
-Sound effects | Yes | Yes | Yes | Yes | Yes @m_span{m-text m-dim} (needs DSP firmware, see @ref consoles-3ds-limits) @m_endspan | Yes | Yes | Yes | SDK-dependent | SDK-dependent
-Module music | Yes @m_span{m-text m-dim} (**XM64**, converted ahead, see @ref consoles-n64-limits) @m_endspan | Yes @m_span{m-text m-dim} (libxmp, see @ref consoles-dreamcast-limits) @m_endspan | Yes @m_span{m-text m-dim} (libxmp, see @ref consoles-wii-limits) @m_endspan | Yes @m_span{m-text m-dim} (libxmp, see @ref consoles-wii-limits) @m_endspan | Yes @m_span{m-text m-dim} (libxmp) @m_endspan | Yes @m_span{m-text m-dim} (libxmp, see @ref consoles-psp-limits) @m_endspan | Yes @m_span{m-text m-dim} (libxmp, see @ref consoles-ps2-limits) @m_endspan | Yes @m_span{m-text m-dim} (libopenmpt, from source, single-threaded) @m_endspan | Yes @m_span{m-text m-dim} (libopenmpt, with libxmp packaged too, see @ref consoles-vita-limits) @m_endspan | SDK-dependent
-Underwater low-pass filter | **No** | **No** | **No** | **No** | **No** | **No** | **No** | **No** | SDK-dependent | Yes
-Local splitscreen | **No** --- needs threads | Yes | Yes | Yes | Yes @m_span{m-text m-dim} (one controller) @m_endspan | Yes @m_span{m-text m-dim} (one controller) @m_endspan | **No** --- needs threads | **No** --- needs threads | Yes | Yes
-Online multiplayer | **No** | **No** | **No** | **No** | Yes @m_span{m-text m-dim} (ENet only, see @ref consoles-3ds-limits) @m_endspan | Yes @m_span{m-text m-dim} (ENet only, see @ref consoles-psp-limits) @m_endspan | **No** | **No** | Yes @m_span{m-text m-dim} (ENet only, see @ref consoles-vita-limits) @m_endspan | Yes
-Post-processing and rescale filters | **No** | **No** | **No** | **No** | **No** | **No** | **No** | Yes | Yes | Yes
-X-ray and blur-behind tile layers @m_span{m-text m-dim} (`TILEMAP_LAYER_EFFECTS`) @m_endspan | **No** --- reduced at load | **No** --- reduced at load | **No** --- reduced at load | **No** --- reduced at load | **No** --- reduced at load | **No** --- reduced at load | **No** --- reduced at load | Yes @m_span{m-text m-dim} (microcode generated, not yet run on a console) @m_endspan | Yes | Yes
-External `.shader` files | **No** | **No** | **No** | **No** | **No** | **No** | **No** | **No** @m_span{m-text m-dim} (no runtime compiler) @m_endspan | Yes | Yes
-Converts the game data itself | **No** | **No** | Yes | **No** | Yes | Yes | **No** | Yes | Yes | Yes
+Feature | N64 | Dreamcast | Wii | GameCube | Wii U | 3DS | PSP | PS2 | PS3 | Vita | Switch
+------- | --- | --------- | --- | -------- | ----- | --- | --- | --- | --- | ---- | ------
+Threads @m_span{m-text m-dim} (`NCINE_WITH_THREADS`) @m_endspan | **No** | Yes | Yes | Yes | Yes @m_span{m-text m-dim} (newlib pthreads) @m_endspan | Yes @m_span{m-text m-dim} (pthread shim over libctru) @m_endspan | Yes | **No** | **No** | Yes | Yes
+Asynchronous tracing @m_span{m-text m-dim} (`DEATH_TRACE_ASYNC`) @m_endspan | No | No | No | No | No | No | No | No | No | No | No
+Audio backend | `N64` @m_span{m-text m-dim} (RSP mixer) @m_endspan | `AICA` | `ASND` | `ASND` | `SDL` @m_span{m-text m-dim} (software mixer, AX voices through wiiu-sdl2) @m_endspan | `NDSP` | `PSP` | `PS2` | `PS3` | `OpenAL` if the SDK has one | `OpenAL` if the SDK has one
+Sound effects | Yes | Yes | Yes | Yes | Yes | Yes @m_span{m-text m-dim} (needs DSP firmware, see @ref consoles-3ds-limits) @m_endspan | Yes | Yes | Yes | SDK-dependent | SDK-dependent
+Module music | Yes @m_span{m-text m-dim} (**XM64**, converted ahead, see @ref consoles-n64-limits) @m_endspan | Yes @m_span{m-text m-dim} (libxmp, see @ref consoles-dreamcast-limits) @m_endspan | Yes @m_span{m-text m-dim} (libxmp, see @ref consoles-wii-limits) @m_endspan | Yes @m_span{m-text m-dim} (libxmp, see @ref consoles-wii-limits) @m_endspan | Yes @m_span{m-text m-dim} (libxmp) @m_endspan | Yes @m_span{m-text m-dim} (libxmp) @m_endspan | Yes @m_span{m-text m-dim} (libxmp, see @ref consoles-psp-limits) @m_endspan | Yes @m_span{m-text m-dim} (libxmp, see @ref consoles-ps2-limits) @m_endspan | Yes @m_span{m-text m-dim} (libopenmpt, from source, single-threaded) @m_endspan | Yes @m_span{m-text m-dim} (libopenmpt, with libxmp packaged too, see @ref consoles-vita-limits) @m_endspan | SDK-dependent
+Underwater low-pass filter | **No** | **No** | **No** | **No** | **No** | **No** | **No** | **No** | **No** | SDK-dependent | Yes
+Local splitscreen | **No** --- needs threads | Yes | Yes | Yes | Yes | Yes @m_span{m-text m-dim} (one controller) @m_endspan | Yes @m_span{m-text m-dim} (one controller) @m_endspan | **No** --- needs threads | **No** --- needs threads | Yes | Yes
+Online multiplayer | **No** | **No** | **No** | **No** | **No** @m_span{m-text m-dim} (not enabled yet, see @ref consoles-wiiu-limits) @m_endspan | Yes @m_span{m-text m-dim} (ENet only, see @ref consoles-3ds-limits) @m_endspan | Yes @m_span{m-text m-dim} (ENet only, see @ref consoles-psp-limits) @m_endspan | **No** | **No** | Yes @m_span{m-text m-dim} (ENet only, see @ref consoles-vita-limits) @m_endspan | Yes
+Post-processing and rescale filters | **No** | **No** | **No** | **No** | Yes with `GX2`, **No** with `Software` | **No** | **No** | **No** | Yes | Yes | Yes
+X-ray and blur-behind tile layers @m_span{m-text m-dim} (`TILEMAP_LAYER_EFFECTS`) @m_endspan | **No** --- reduced at load | **No** --- reduced at load | **No** --- reduced at load | **No** --- reduced at load | Yes with `GX2`, reduced at load with `Software` | **No** --- reduced at load | **No** --- reduced at load | **No** --- reduced at load | Yes @m_span{m-text m-dim} (microcode generated, not yet run on a console) @m_endspan | Yes | Yes
+External `.shader` files | **No** | **No** | **No** | **No** | **No** @m_span{m-text m-dim} (shaders are compiled offline) @m_endspan | **No** | **No** | **No** | **No** @m_span{m-text m-dim} (no runtime compiler) @m_endspan | Yes | Yes
+Converts the game data itself | **No** | **No** | Yes | **No** | Yes | Yes | Yes | **No** | Yes | Yes | Yes
 
 @subsection consoles-common-audio Audio backends
 
@@ -1036,8 +1036,10 @@ Cemu shows with coreinit logging on.
     to one frame later than with `Software`.
 -   With `GX2`, batched sprites (drawn as instances from a uniform block) and tile layers while
     scrolling run on the console without problems. Cemu's frame rate says nothing about the console's.
--   No online multiplayer, update check or level pack downloads: the console's network stack is not
-    brought up. Local multiplayer works with any mix of the GamePad, Pro Controllers and Wii Remotes.
+-   No online multiplayer, update check or level pack downloads yet. wut provides sockets and devkitPro
+    packages libcurl and mbedTLS for the Wii U, but the port does not enable them (`WITH_ONLINE_MULTIPLAYER`
+    is off, libcurl is not linked); that needs testing on a console first. Local multiplayer works with
+    any mix of the GamePad, Pro Controllers and Wii Remotes.
 -   Asynchronous tracing is off, because the RPX format has no thread-local storage.
 
 @section consoles-gamecube Nintendo GameCube
