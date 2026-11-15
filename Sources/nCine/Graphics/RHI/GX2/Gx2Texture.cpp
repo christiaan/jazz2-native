@@ -469,8 +469,11 @@ namespace nCine::RHI::GX2
 			return nullptr;
 		}
 		// The caller writes straight into the GPU copy. Cinematics alternates between two textures, so the frame
-		// that sampled this one is normally done already.
-		Gx2Device::WaitForUse(_lastUse);
+		// that sampled this one is normally done already. If the wait times out (a GPU hang), the texture stays
+		// protected and keeps its token, so the next map waits again.
+		if (!Gx2Device::WaitForUse(_lastUse)) {
+			return nullptr;
+		}
 		_lastUse = 0;
 
 		// The caller overwrites the whole surface every frame, so the host store is now stale by definition;
