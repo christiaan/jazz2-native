@@ -441,6 +441,15 @@ wrong colours**: brown walls turn magenta, green turns blue. The average colour 
   analysis and risks the hardware for an emulator bug, so none was made. The proper fix is in Cemu (see
   above). A ready-to-submit issue with attachments is in
   `~/jazz2-wiiu-test/upstream/cemu-pvps-trans-collision/` (`REPORT.md`); submitting it is up to the owner.
+- **The blue streaks along the water surface in the PR's `rescue/beach2` screenshot are the same Cemu bug**
+  (2026-11-15, raised by the upstream maintainer on PR 193). In `CombineWithWater`'s pixel shader, group 46 computes
+  the reflection row `2 * uWaterLevel - uvLocal.y` in the `w` slot while the trans slot writes R123.w for the
+  simplex noise; group 47 reads PV.w for `* 0.97 - waveHeight`. Cemu hands it the noise value, so the reflection
+  samples a random row (often the sky). Proof: with only that expression in `Include/WaterFs.inc` rewritten as
+  `(uWaterLevel - (uvLocal.y - uWaterLevel)) * 0.97` (same math; CafeGLSL then schedules it without the collision,
+  and `CombineWithWater` drops out of `scan_cemu_pvps.py`'s list), the same Cemu run shows the orange sand reflection.
+  Screenshots: `~/jazz2-wiiu-test/pr-screenshots/water-pvps/`. Not committed: changing the include changes the
+  D3D11 and Vulkan headers too, which only regenerate correctly on Windows, and it would fix Cemu only.
 - With the Software build, splitscreen showed a black screen in Cemu (as `rescue/beach2` did earlier); not
   looked into.
 
