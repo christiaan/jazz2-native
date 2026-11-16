@@ -1010,7 +1010,11 @@ convert the original files on the console.
     block holds 9 words, it picks the 7-word copy, because the result of a `cmplwi` on `cr0` made a few
     blocks earlier is lost, and the last two words of the old contents are not copied. A string built with
     @cpp StringUtils::replaceAll() @ce can come out truncated this way, for example a multiplayer server's
-    welcome message. Whether it happens depends on Cemu's settings (it did not with coreinit logging on).
+    welcome message. Cemu 2.6 compiles only the part of a function that is contiguous with the address it
+    was first entered at, treats a branch out of that part as an exit, and assumes `cr0` is dead there, so
+    the compare stores only the bit its own branch tests. Whether a function is hit therefore depends on
+    the address it was first compiled from. Cemu's main branch has a reworked recompiler that compiles the
+    whole function and should not be affected (from reading the source, not tested).
     With the CPU mode set to the single-core interpreter in the game profile
     @m_span{m-text m-dim} (`cpuMode = 0` under `[CPU]` in @cpp "gameProfiles/<title ID>.ini" @ce) @m_endspan
     the copies are correct. The console is not affected.
