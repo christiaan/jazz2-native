@@ -1004,6 +1004,14 @@ convert the original files on the console.
     those for libstdc++'s checks (the `shared_ptr` reference count overflow test, for example). The
     game then hangs with a grey screen at the first one. Replacing the conditional traps in @cpp "jazz2.elf" @ce with `nop` and
     running `elf2rpl` and `wuhbtool` again gives a build Cemu can run. The console is not affected.
+-   Cemu 2.6's PowerPC recompiler sometimes copies too little in newlib's @cpp realloc() @ce: when the old
+    block holds 9 words, it picks the 7-word copy, because the result of a `cmplwi` on `cr0` made a few
+    blocks earlier is lost, and the last two words of the old contents are not copied. A string built with
+    @cpp StringUtils::replaceAll() @ce can come out truncated this way, for example a multiplayer server's
+    welcome message. Whether it happens depends on Cemu's settings (it did not with coreinit logging on).
+    With the CPU mode set to the single-core interpreter in the game profile
+    @m_span{m-text m-dim} (`cpuMode = 0` under `[CPU]` in @cpp "gameProfiles/<title ID>.ini" @ce) @m_endspan
+    the copies are correct. The console is not affected.
 
 @m_class{m-noindent}
 
@@ -1030,8 +1038,9 @@ Cemu shows with coreinit logging on.
 -   <b>Online multiplayer works, over ENet only.</b> wut's sockets @m_span{m-text m-dim} (nsysnet) @m_endspan
     connect to the network on their own the first time a socket is used. They have no IPv6 and no
     `sendmsg()`/`recvmsg()`, so ENet is built with `ENET_IPV6=0` and sends each datagram with `sendto()`,
-    as on the 3DS. `WITH_WEBSOCKET` is forced off, because wut has no `<netinet/ip.h>`. Tested in Cemu
-    against the Linux dedicated server (connect, asset download, joining a level), not yet on a console.
+    as on the 3DS. `WITH_WEBSOCKET` is forced off, because wut has no `<netinet/ip.h>`. Tested in Cemu,
+    not yet on a console: joining the Linux dedicated server (connect, asset download, joining a level),
+    and hosting a Battle game that a second Cemu instance joined (asset check, spawn, round start).
 -   No update check, online server list or level pack downloads yet: devkitPro packages libcurl and
     mbedTLS for the Wii U, but libcurl is not linked. A server can still be joined by its address.
 -   Local multiplayer works with any mix of the GamePad, Pro Controllers and Wii Remotes.
