@@ -1,7 +1,7 @@
 #!/bin/bash
 # Configure (first time) and build a Wii U build directory in the devkitPPC image.
 #   B    build directory under the repo (default _build_wiiu_gx2)
-#   RHI  NCINE_PREFERRED_RHI for the first configure (default GX2; Software for the CPU rasterizer)
+#   RHI  NCINE_PREFERRED_RHI for the first configure (GX2, the only backend since the Software one was removed)
 #   LOG  full build log (default $WIIU_TEST_DIR/build.log); only errors are printed
 R=$(cd "$(dirname "$0")/../.." && pwd)
 T=${WIIU_TEST_DIR:-$HOME/jazz2-wiiu-test}

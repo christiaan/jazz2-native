@@ -32,7 +32,6 @@ The game data goes in `Content/` as for any build. Cemu's SD card is
 
 ```sh
 Tools/WiiU/build.sh                                 # GX2 build in _build_wiiu_gx2/, errors only, log in $T/build.log
-B=_build_wiiu RHI=Software Tools/WiiU/build.sh      # the Software backend instead
 B=_build_wiiu_gx2 SHOTS="30 60" Tools/WiiU/testrun.sh   # repack, run in Cemu, screenshots in $T/out/
 ```
 
