@@ -22,6 +22,7 @@
 #include <gx2/shaders.h>
 #include <gx2/state.h>
 #include <gx2/swap.h>
+#include <nn/swkbd.h>
 
 namespace nCine::RHI::GX2
 {
@@ -102,6 +103,7 @@ namespace nCine::RHI::GX2
 	bool Gx2Device::_inForeground = true;
 	bool Gx2Device::_vsync = true;
 	bool Gx2Device::_firstFrame = true;
+	bool Gx2Device::_screenKeyboardOverlay = false;
 	std::uint32_t Gx2Device::_swapToken = 0;
 	std::uint32_t Gx2Device::_frameCounter = 0;
 	bool Gx2Device::_targetDirty = true;
@@ -830,6 +832,8 @@ namespace nCine::RHI::GX2
 			WaitForPreviousFlip();
 		}
 
+		DrawScreenKeyboard();
+
 		// The copy scales the screen buffer to each scan buffer's own resolution (the TV mode SDL picked, and
 		// 854x480 on the GamePad)
 		GX2CopyColorBufferToScanBuffer(&_screenBuffer, GX2_SCAN_TARGET_TV);
@@ -855,6 +859,37 @@ namespace nCine::RHI::GX2
 		_frameCounter++;
 		ReleaseRetiredBlocks();
 		InvalidateTarget();
+	}
+
+	void Gx2Device::ShowScreenKeyboardOverlay()
+	{
+		_screenKeyboardOverlay = true;
+	}
+
+	void Gx2Device::DrawScreenKeyboard()
+	{
+		// The flag is only set once wiiu-sdl2 has created the keyboard, so querying its state is safe. It stays
+		// set while the keyboard animates out, and is cleared once it is gone.
+		if (!_screenKeyboardOverlay) {
+			return;
+		}
+		if (nn::swkbd::GetStateInputForm() == nn::swkbd::State::Hidden) {
+			_screenKeyboardOverlay = false;
+			return;
+		}
+
+		// The keyboard sets up its own pipeline, so it must not write into our context state, and it draws into
+		// whatever colour buffer is bound. wiiu-sdl2's own present switches the UNORM
+		// buffer to sRGB for it (`WIIU_FIX_SWKBD_GAMMA`), otherwise the keyboard's gamma is wrong.
+		GX2SetContextState(nullptr);
+		const GX2SurfaceFormat format = _screenBuffer.surface.format;
+		_screenBuffer.surface.format = GX2_SURFACE_FORMAT_SRGB_R8_G8_B8_A8;
+		GX2InitColorBufferRegs(&_screenBuffer);
+		GX2SetColorBuffer(&_screenBuffer, GX2_RENDER_TARGET_0);
+		nn::swkbd::DrawDRC();
+		_screenBuffer.surface.format = format;
+		GX2InitColorBufferRegs(&_screenBuffer);
+		RestoreContextState();
 	}
 
 	void Gx2Device::WaitForPreviousFlip()

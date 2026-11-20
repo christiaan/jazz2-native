@@ -1797,10 +1797,10 @@ void GameEventHandler::OnPacketReceived(const Peer& peer, std::uint8_t channelId
 						auto s = fs::Open(fullPath, FileAccess::Read);
 
 						packetOut.WriteVariableInt64(s->GetSize());
-						packetOut.WriteValue<std::uint32_t>(nCine::crc32(*s));
+						packetOut.WriteValueAsLE<std::uint32_t>(nCine::crc32(*s));
 					} else {
 						packetOut.WriteVariableInt64(0);
-						packetOut.WriteValue<std::uint32_t>(0);
+						packetOut.WriteValueAsLE<std::uint32_t>(0);
 					}
 				}
 
@@ -2287,6 +2287,9 @@ RecreateCache:
 	fs::RemoveDirectoryRecursive(animationsPath);
 	fs::RemoveDirectoryRecursive(fs::CombinePath(resolver.GetCachePath(), "Downloads"_s));
 
+	// The outdated "Source.pak" is still mounted, and its open file would make writing the new one fail
+	resolver.UnmountCachePaks();
+
 	// Create .pak file, retrying a few times in case it is still held by something
 	{
 		Compatibility::JJ2Version version;
@@ -2301,10 +2304,12 @@ RecreateCache:
 
 		if (result == Compatibility::AssetConverter::Result::CannotWriteTarget) {
 			LOGE("Cannot open \"…{}Cache{}Source.pak\" file for writing! Please check if this file is accessible and try again.", fs::PathSeparator, fs::PathSeparator);
+			resolver.RemountPaks();
 			_flags |= Flags::IsVerified;
 			return;
 		} else if (result == Compatibility::AssetConverter::Result::UnsupportedVersion) {
 			LOGE("Provided Jazz Jackrabbit 2 version is not supported. Make sure supported Jazz Jackrabbit 2 version is present in \"{}\" directory.", resolver.GetSourcePath());
+			resolver.RemountPaks();
 			_flags |= Flags::IsVerified;
 			return;
 		}
